@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -25,5 +26,8 @@ public:
     // Asks the process to quit; escalates to a hard kill after graceTimeoutMs.
     virtual bool terminate(std::uint32_t pid, int graceTimeoutMs) = 0;
 };
+
+// Implemented once per OS in src/platform_<os>.*; CMake compiles exactly one.
+std::unique_ptr<PlatformAdapter> createPlatformAdapter();
 
 }  // namespace brainrot

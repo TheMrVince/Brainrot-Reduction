@@ -4,10 +4,17 @@ project(brainrot_enforcer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_OBJCXX_STANDARD 20)
+set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 
 add_executable(enforcer src/main.cpp)
 target_include_directories(enforcer PRIVATE include)
 
-# Platform adapters are added here as they are written:
-#   if(APPLE)  -> src/platform_macos.mm  (language OBJCXX)
-#   if(WIN32)  -> src/platform_windows.cpp
+if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(enforcer PRIVATE src/platform_macos.mm)
+    set_source_files_properties(src/platform_macos.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(enforcer PRIVATE "-framework AppKit" "-framework Foundation")
+else()
+    message(FATAL_ERROR "No platform adapter for this OS yet (Windows arrives in phase C6)")
+endif()
