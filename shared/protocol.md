@@ -34,7 +34,16 @@ arrive in pieces.
 - `unlockedUntil`: Unix seconds, or `null`. While in the future the enforcer treats the policy as unlocked and relocks on its own when it passes.
 - `locked` (boolean) and `apps` (array) are required. `closeWarningMinutes` defaults to 10 and `dryRun` defaults to `true`, so a client that forgets the field cannot start closing apps.
 - An invalid `set_policy` is rejected with an `error` response and the previous policy stays in force.
-- The enforcer persists the last policy to disk and enforces it on restart (phase C5).
+- The enforcer saves every accepted policy to `~/.brainrot-reduction/policy.json` (mode 0600) and enforces it again on restart, before the controller reconnects.
+
+### How a policy is enforced
+- Apps that were **already running** when the lock began get a desktop notification and are closed after `closeWarningMinutes` (immediately if 0). Re-sending the same policy does not restart the countdown.
+- Apps that **start while locked** are closed immediately.
+- While `locked` is false, or before `unlockedUntil`, nothing is closed. When `unlockedUntil` passes, the lock begins and the rules above apply, with no message from the controller needed.
+- `dryRun: true` only logs what would be closed.
+
+### Recommended use by the controller
+Express "solved today" as `locked: true` with `unlockedUntil` set to the start of the next day, not as `locked: false`. The unlock then ends by itself even if the controller has crashed or the machine was off, so the system fails closed. Emergency unlocks work the same way, with `unlockedUntil` an hour away.
 
 ### `ping`
 ```json

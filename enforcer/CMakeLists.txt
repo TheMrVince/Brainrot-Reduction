@@ -17,7 +17,12 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(json)
 
 # Portable logic: no OS headers allowed in here.
-add_library(enforcer_core STATIC src/matcher.cpp src/message_handler.cpp src/enforcer.cpp)
+add_library(enforcer_core STATIC
+    src/matcher.cpp
+    src/policy_json.cpp
+    src/policy_store.cpp
+    src/message_handler.cpp
+    src/enforcer.cpp)
 target_include_directories(enforcer_core PUBLIC include)
 target_link_libraries(enforcer_core PRIVATE nlohmann_json::nlohmann_json)
 
@@ -50,6 +55,10 @@ add_test(NAME matcher COMMAND matcher_test)
 add_executable(message_handler_test tests/message_handler_test.cpp)
 target_link_libraries(message_handler_test PRIVATE enforcer_core nlohmann_json::nlohmann_json)
 add_test(NAME message_handler COMMAND message_handler_test)
+
+add_executable(policy_test tests/policy_test.cpp)
+target_link_libraries(policy_test PRIVATE enforcer_core)
+add_test(NAME policy COMMAND policy_test)
 
 add_executable(enforcer_test tests/enforcer_test.cpp)
 target_link_libraries(enforcer_test PRIVATE enforcer_core)

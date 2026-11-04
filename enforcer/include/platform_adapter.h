@@ -11,6 +11,7 @@ namespace brainrot {
 struct ProcessInfo {
     std::uint32_t pid;
     std::uint32_t parentPid = 0;
+    std::int64_t startTime = 0;  // Unix seconds; 0 if unknown
     std::string name;
     std::string path;
     std::string identifier;  // bundle ID on macOS (own, else the enclosing app's), empty on Windows
@@ -36,6 +37,8 @@ public:
     virtual void stop() = 0;
     // Asks the process to quit; escalates to a hard kill after graceTimeoutMs.
     virtual bool terminate(std::uint32_t pid, int graceTimeoutMs) = 0;
+    // Best-effort desktop notification; never blocks and never fails the caller.
+    virtual void notify(const std::string& title, const std::string& message) = 0;
 };
 
 // Implemented once per OS in src/platform_<os>.*; CMake compiles exactly one.

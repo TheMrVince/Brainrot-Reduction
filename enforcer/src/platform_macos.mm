@@ -99,6 +99,7 @@ std::optional<ProcessInfo> describe(pid_t pid) {
     struct proc_bsdinfo bsd;
     if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd)) == sizeof(bsd)) {
         info.parentPid = bsd.pbi_ppid;
+        info.startTime = static_cast<std::int64_t>(bsd.pbi_start_tvsec);
     }
 
     NSRunningApplication* app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
@@ -180,6 +181,25 @@ public:
     }
 
     void stop() override { stopping_ = true; }
+
+    void notify(const std::string& title, const std::string& message) override {
+        auto quote = [](const std::string& text) {
+            std::string out = "\"";
+            for (char c : text) {
+                if (c == '"' || c == '\\') out += '\\';
+                out += (c == '\n' || c == '\r') ? ' ' : c;
+            }
+            return out + "\"";
+        };
+        std::string script = "display notification " + quote(message) + " with title " + quote(title);
+        NSString* source = [NSString stringWithUTF8String:script.c_str()];
+        if (!source) return;
+
+        NSTask* task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/osascript"];
+        task.arguments = @[ @"-e", source ];
+        [task launchAndReturnError:nil];
+    }
 
     bool terminate(std::uint32_t pid, int graceTimeoutMs) override {
         pid_t target = static_cast<pid_t>(pid);

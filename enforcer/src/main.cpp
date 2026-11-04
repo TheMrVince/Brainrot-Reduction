@@ -13,6 +13,7 @@
 #include "matcher.h"
 #include "message_handler.h"
 #include "platform_adapter.h"
+#include "policy_store.h"
 
 namespace {
 
@@ -30,7 +31,7 @@ void usage() {
     std::cerr << "Usage:\n"
                  "  enforcer list [--all]\n"
                  "  enforcer watch\n"
-                 "  enforcer serve [--socket PATH]\n"
+                 "  enforcer serve [--socket PATH] [--policy-file PATH]\n"
                  "  enforcer scan  <rule>\n"
                  "  enforcer close <rule> [--dry-run] [--grace-ms N]\n"
                  "\n"
@@ -115,17 +116,20 @@ int apply(brainrot::PlatformAdapter& adapter, const Options& opts, bool act) {
     return failures == 0 ? 0 : 1;
 }
 
-std::string defaultSocketPath() {
+std::string defaultDataDir() {
     const char* home = std::getenv("HOME");
-    return std::string(home ? home : "/tmp") + "/.brainrot-reduction/enforcer.sock";
+    return std::string(home ? home : "/tmp") + "/.brainrot-reduction";
 }
 
 // The daemon: receives policies over IPC and enforces them.
 int serve(const std::vector<std::string>& args, brainrot::PlatformAdapter& adapter) {
-    std::string socketPath = defaultSocketPath();
+    std::string socketPath = defaultDataDir() + "/enforcer.sock";
+    std::string policyFile = defaultDataDir() + "/policy.json";
     for (size_t i = 1; i < args.size(); ++i) {
         if (args[i] == "--socket" && i + 1 < args.size()) {
             socketPath = args[++i];
+        } else if (args[i] == "--policy-file" && i + 1 < args.size()) {
+            policyFile = args[++i];
         } else {
             std::cerr << "Unknown or incomplete option: " << args[i] << "\n";
             usage();
@@ -144,6 +148,8 @@ int serve(const std::vector<std::string>& args, brainrot::PlatformAdapter& adapt
             std::chrono::system_clock::now().time_since_epoch()).count());
     });
 
+    brainrot::PolicyStore store(policyFile);
+
     brainrot::MessageHandler handler([&](const brainrot::Policy& policy) {
         std::ostringstream line;
         line << "policy: " << (policy.locked ? "locked" : "unlocked")
@@ -156,6 +162,9 @@ int serve(const std::vector<std::string>& args, brainrot::PlatformAdapter& adapt
         }
         line << "]";
         log(line.str());
+
+        std::string saveError = store.save(policy);
+        if (!saveError.empty()) log("warning: could not save policy: " + saveError);
         enforcer.setPolicy(policy);
     });
 
@@ -166,6 +175,16 @@ int serve(const std::vector<std::string>& args, brainrot::PlatformAdapter& adapt
     if (!error.empty()) {
         std::cerr << "Cannot start: " << error << "\n";
         return 1;
+    }
+
+    // Enforce the last known policy right away, before the controller has reconnected.
+    std::string loadProblem;
+    if (std::optional<brainrot::Policy> saved = store.load(loadProblem)) {
+        log(std::string("loaded saved policy: ") + (saved->locked ? "locked" : "unlocked") + ", " +
+            std::to_string(saved->apps.size()) + " app rule(s)");
+        enforcer.setPolicy(*saved);
+    } else if (!loadProblem.empty()) {
+        log("warning: ignoring saved policy: " + loadProblem);
     }
 
     enforcer.start();
