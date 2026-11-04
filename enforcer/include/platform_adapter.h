@@ -12,7 +12,7 @@ struct ProcessInfo {
     std::uint32_t pid;
     std::string name;
     std::string path;
-    std::string identifier;  // bundle ID on macOS, empty on Windows
+    std::string identifier;  // bundle ID on macOS (own, else the enclosing app's), empty on Windows
     std::string cmdline;
     std::string detectedBy;  // diagnostic: "notification" or "poll", set on start events
 };
@@ -23,6 +23,8 @@ public:
     virtual ~PlatformAdapter() = default;
 
     virtual std::vector<ProcessInfo> listProcesses() = 0;
+    // This process and its ancestors (shell, terminal, ...), nearest first. Never to be killed.
+    virtual std::vector<std::uint32_t> ownProcessChain() = 0;
     // Reports each process that starts after this call, exactly once. Existing processes are
     // not reported. The callback may run on any thread, never concurrently with itself, and
     // only while run() is active. Call before run().

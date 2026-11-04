@@ -4,14 +4,17 @@
 
 #include <libproc.h>
 #include <signal.h>
+#include <sys/sysctl.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cstring>
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace brainrot {
@@ -36,6 +39,50 @@ bool waitForExit(pid_t pid, int timeoutMs) {
     return true;
 }
 
+// KERN_PROCARGS2 layout: int argc, executable path, NUL padding, argc NUL-terminated args, env.
+// Empty when the process is not readable (other users' processes) or has already exited.
+std::string readCmdline(pid_t pid) {
+    int mib[3] = {CTL_KERN, KERN_PROCARGS2, pid};
+    size_t size = 0;
+    if (sysctl(mib, 3, nullptr, &size, nullptr, 0) != 0 || size < sizeof(int)) return {};
+
+    std::vector<char> buf(size);
+    if (sysctl(mib, 3, buf.data(), &size, nullptr, 0) != 0 || size < sizeof(int)) return {};
+
+    int argc = 0;
+    std::memcpy(&argc, buf.data(), sizeof(int));
+    size_t i = sizeof(int);
+    while (i < size && buf[i] != '\0') ++i;
+    while (i < size && buf[i] == '\0') ++i;
+
+    std::string out;
+    for (int arg = 0; arg < argc && i < size; ++arg) {
+        size_t start = i;
+        while (i < size && buf[i] != '\0') ++i;
+        if (arg > 0) out += ' ';
+        out.append(&buf[start], i - start);
+        ++i;
+    }
+    return out;
+}
+
+// Helpers inside an app (Electron helpers, crash handlers) often have no bundle ID of their
+// own; they belong to the outermost .app that contains their executable.
+std::string enclosingBundleId(const std::string& executablePath) {
+    size_t end = executablePath.find(".app/");
+    if (end == std::string::npos) return {};
+    std::string bundlePath = executablePath.substr(0, end + 4);
+
+    static std::mutex cacheMutex;
+    static std::unordered_map<std::string, std::string> cache;
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    auto it = cache.find(bundlePath);
+    if (it != cache.end()) return it->second;
+
+    NSBundle* bundle = [NSBundle bundleWithPath:[NSString stringWithUTF8String:bundlePath.c_str()]];
+    return cache[bundlePath] = bundle ? toStd(bundle.bundleIdentifier) : std::string();
+}
+
 std::optional<ProcessInfo> describe(pid_t pid) {
     char path[PROC_PIDPATHINFO_MAXSIZE];
     if (proc_pidpath(pid, path, sizeof(path)) <= 0) return std::nullopt;
@@ -47,6 +94,7 @@ std::optional<ProcessInfo> describe(pid_t pid) {
     info.pid = static_cast<std::uint32_t>(pid);
     info.name = name;
     info.path = path;
+    info.cmdline = readCmdline(pid);
 
     NSRunningApplication* app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
     if (app) {
@@ -54,6 +102,7 @@ std::optional<ProcessInfo> describe(pid_t pid) {
         std::string localized = toStd(app.localizedName);
         if (!localized.empty()) info.name = localized;
     }
+    if (info.identifier.empty()) info.identifier = enclosingBundleId(info.path);
     return info;
 }
 
@@ -75,6 +124,18 @@ public:
             if (auto info = describe(pids[i])) result.push_back(std::move(*info));
         }
         return result;
+    }
+
+    std::vector<std::uint32_t> ownProcessChain() override {
+        std::vector<std::uint32_t> chain;
+        pid_t pid = getpid();
+        while (pid > 1 && chain.size() < 64) {
+            chain.push_back(static_cast<std::uint32_t>(pid));
+            struct proc_bsdinfo bsd;
+            if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd)) != sizeof(bsd)) break;
+            pid = static_cast<pid_t>(bsd.pbi_ppid);
+        }
+        return chain;
     }
 
     void onProcessStart(std::function<void(const ProcessInfo&)> callback) override {

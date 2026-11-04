@@ -2,7 +2,7 @@
   "leetcodeUsername": "your-username-here",
   "dayStartHour": 4,
   "blockedApps": [
-    { "name": "Minecraft Launcher", "bundleId": "com.mojang.minecraftlauncher" }
+    { "label": "Discord", "bundleId": "com.hnc.Discord" }
   ],
   "closeWarningMinutes": 10,
   "pollIntervalSeconds": 300,

@@ -1,25 +1,17 @@
-#include <algorithm>
-#include <cctype>
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
 
+#include "matcher.h"
 #include "platform_adapter.h"
 
 namespace {
 
+using brainrot::AppRule;
+using brainrot::Matcher;
 using brainrot::ProcessInfo;
-
-std::string lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
-    return s;
-}
-
-bool matches(const ProcessInfo& p, const std::string& query) {
-    return p.identifier == query || lower(p.name) == lower(query);
-}
 
 brainrot::PlatformAdapter* g_adapter = nullptr;
 
@@ -31,7 +23,52 @@ void usage() {
     std::cerr << "Usage:\n"
                  "  enforcer list [--all]\n"
                  "  enforcer watch\n"
-                 "  enforcer close [--dry-run] [--grace-ms N] <name-or-bundle-id>\n";
+                 "  enforcer scan  <rule>\n"
+                 "  enforcer close <rule> [--dry-run] [--grace-ms N]\n"
+                 "\n"
+                 "A rule needs at least one of (a process matches if any one matches):\n"
+                 "  --bundle-id ID    the app and its helpers\n"
+                 "  --name NAME       exact process/app name\n"
+                 "  --path-prefix P   executable path starts with P\n"
+                 "  --cmdline TEXT    command line contains TEXT (repeatable; all must appear)\n";
+}
+
+struct Options {
+    AppRule rule;
+    bool dryRun = false;
+    int graceMs = 3000;
+    bool valid = true;
+};
+
+Options parseOptions(const std::vector<std::string>& args) {
+    Options opts;
+    for (size_t i = 1; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        bool hasValue = i + 1 < args.size();
+        if (a == "--dry-run") {
+            opts.dryRun = true;
+        } else if (a == "--bundle-id" && hasValue) {
+            opts.rule.bundleId = args[++i];
+        } else if (a == "--name" && hasValue) {
+            opts.rule.processName = args[++i];
+        } else if (a == "--path-prefix" && hasValue) {
+            opts.rule.pathPrefix = args[++i];
+        } else if (a == "--cmdline" && hasValue) {
+            opts.rule.cmdlineContains.push_back(args[++i]);
+        } else if (a == "--grace-ms" && hasValue) {
+            opts.graceMs = std::atoi(args[++i].c_str());
+        } else {
+            std::cerr << "Unknown or incomplete option: " << a << "\n";
+            opts.valid = false;
+        }
+    }
+    if (opts.rule.bundleId.empty() && opts.rule.processName.empty() && opts.rule.pathPrefix.empty() &&
+        opts.rule.cmdlineContains.empty()) {
+        std::cerr << "Give at least one rule option.\n";
+        opts.valid = false;
+    }
+    opts.rule.label = "cli rule";
+    return opts;
 }
 
 int list(brainrot::PlatformAdapter& adapter, bool all) {
@@ -42,25 +79,30 @@ int list(brainrot::PlatformAdapter& adapter, bool all) {
     return 0;
 }
 
-int close(brainrot::PlatformAdapter& adapter, const std::string& query, bool dryRun, int graceMs) {
-    std::vector<ProcessInfo> targets;
-    for (const auto& p : adapter.listProcesses()) {
-        if (matches(p, query)) targets.push_back(p);
-    }
-    if (targets.empty()) {
-        std::cerr << "No running process matches \"" << query << "\"\n";
-        return 1;
-    }
+// scan and close share this: both only ever act on what the matcher says to block.
+int apply(brainrot::PlatformAdapter& adapter, const Options& opts, bool act) {
+    Matcher matcher({opts.rule}, adapter.ownProcessChain());
 
+    int matched = 0;
     int failures = 0;
-    for (const auto& p : targets) {
-        if (dryRun) {
-            std::cout << "[dry run] would close " << p.name << " (pid " << p.pid << ")\n";
-            continue;
+    for (const auto& p : adapter.listProcesses()) {
+        if (!matcher.matchRule(p)) continue;
+        ++matched;
+
+        std::string who = p.name + " (pid " + std::to_string(p.pid) + ")";
+        if (!matcher.shouldBlock(p)) {
+            std::cout << "PROTECTED  " << who << "\n";
+        } else if (!act || opts.dryRun) {
+            std::cout << (act ? "[dry run] would close  " : "BLOCK      ") << who << "\n";
+        } else {
+            bool ok = adapter.terminate(p.pid, opts.graceMs);
+            std::cout << (ok ? "closed     " : "FAILED     ") << who << "\n";
+            if (!ok) ++failures;
         }
-        bool ok = adapter.terminate(p.pid, graceMs);
-        std::cout << (ok ? "closed " : "FAILED to close ") << p.name << " (pid " << p.pid << ")\n";
-        if (!ok) ++failures;
+    }
+    if (matched == 0) {
+        std::cerr << "No running process matches that rule\n";
+        return 1;
     }
     return failures == 0 ? 0 : 1;
 }
@@ -80,26 +122,6 @@ int main(int argc, char** argv) {
         return list(*adapter, args.size() > 1 && args[1] == "--all");
     }
 
-    if (args[0] == "close") {
-        bool dryRun = false;
-        int graceMs = 3000;
-        std::string query;
-        for (size_t i = 1; i < args.size(); ++i) {
-            if (args[i] == "--dry-run") {
-                dryRun = true;
-            } else if (args[i] == "--grace-ms" && i + 1 < args.size()) {
-                graceMs = std::atoi(args[++i].c_str());
-            } else {
-                query = args[i];
-            }
-        }
-        if (query.empty()) {
-            usage();
-            return 2;
-        }
-        return close(*adapter, query, dryRun, graceMs);
-    }
-
     if (args[0] == "watch") {
         g_adapter = adapter.get();
         std::signal(SIGINT, onSignal);
@@ -111,6 +133,15 @@ int main(int argc, char** argv) {
         std::cout << "Watching for new processes. Ctrl+C to stop." << std::endl;
         adapter->run();
         return 0;
+    }
+
+    if (args[0] == "scan" || args[0] == "close") {
+        Options opts = parseOptions(args);
+        if (!opts.valid) {
+            usage();
+            return 2;
+        }
+        return apply(*adapter, opts, args[0] == "close");
     }
 
     usage();

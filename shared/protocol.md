@@ -14,10 +14,17 @@ The controller is the client; the enforcer is the server.
   "closeWarningMinutes": 10,
   "dryRun": true,
   "apps": [
-    { "name": "Minecraft Launcher", "bundleId": "com.mojang.minecraftlauncher" }
+    { "label": "Discord", "bundleId": "com.hnc.Discord" }
   ]
 }
 ```
+- Each entry in `apps` is a rule. A process matches if **any** criterion that is set matches; a rule with no criteria matches nothing. Comparisons are case-insensitive.
+  - `bundleId`: the app and its helpers (`<id>` and `<id>.*`)
+  - `processName`: exact process/app name
+  - `pathPrefix`: executable path starts with this
+  - `cmdlineContains`: list of strings that must **all** appear in the command line
+  - `label`: display only
+- The enforcer has a hard-coded protection list (system paths, terminals, editors, the controller, and its own process chain). It wins over any rule and cannot be configured away.
 - `unlockedUntil`: Unix seconds, or `null`. While in the future the enforcer treats the policy as unlocked and relocks on its own when it passes.
 - The enforcer persists the last policy to disk and enforces it on restart.
 
@@ -35,7 +42,5 @@ The controller is the client; the enforcer is the server.
 
 ### `blocked`
 ```json
-{ "event": "blocked", "app": "Minecraft Launcher", "pid": 4821, "dryRun": false }
+{ "event": "blocked", "app": "Discord", "pid": 4821, "dryRun": false }
 ```
-
-Open questions: app matching rules beyond `bundleId` (executable path, command-line substring) are not specified yet.
