@@ -1,9 +1,48 @@
 package com.brainrot.controller;
 
+import com.brainrot.controller.leetcode.AcceptedSubmission;
+import com.brainrot.controller.leetcode.LeetCodeClient;
+import com.brainrot.controller.time.DayClock;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
 public final class Main {
+    private static final int DAY_START_HOUR = 4;
+    private static final int FETCH_LIMIT = 20;
+    private static final DateTimeFormatter DISPLAY =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
+
     private Main() {}
 
-    public static void main(String[] args) {
-        System.out.println("Brainrot Reduction controller (skeleton)");
+    public static void main(String[] args) throws InterruptedException {
+        if (args.length != 1) {
+            System.err.println("Usage: solved-today <leetcode-username>");
+            System.exit(2);
+        }
+
+        DayClock clock = new DayClock(ZoneId.systemDefault(), DAY_START_HOUR);
+        Instant now = Instant.now();
+
+        List<AcceptedSubmission> recent;
+        try {
+            recent = new LeetCodeClient().fetchRecentAccepted(args[0], FETCH_LIMIT);
+        } catch (IOException e) {
+            System.err.println("Could not check LeetCode: " + e.getMessage());
+            System.exit(1);
+            return;
+        }
+
+        System.out.println("Day started at " + DISPLAY.format(clock.dayStart(now)));
+        for (AcceptedSubmission s : recent.subList(0, Math.min(5, recent.size()))) {
+            String marker = clock.isToday(s.solvedAt(), now) ? "*" : " ";
+            System.out.println(marker + " " + DISPLAY.format(s.solvedAt()) + "  " + s.title());
+        }
+
+        boolean solvedToday = recent.stream().anyMatch(s -> clock.isToday(s.solvedAt(), now));
+        System.out.println("Solved today: " + (solvedToday ? "YES" : "NO"));
     }
 }
