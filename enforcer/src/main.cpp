@@ -1,10 +1,15 @@
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
+#include "ipc_server.h"
 #include "matcher.h"
+#include "message_handler.h"
 #include "platform_adapter.h"
 
 namespace {
@@ -19,10 +24,17 @@ void onSignal(int) {
     if (g_adapter) g_adapter->stop();
 }
 
+volatile std::sig_atomic_t g_stopServing = 0;
+
+void onServeSignal(int) {
+    g_stopServing = 1;
+}
+
 void usage() {
     std::cerr << "Usage:\n"
                  "  enforcer list [--all]\n"
                  "  enforcer watch\n"
+                 "  enforcer serve [--socket PATH]\n"
                  "  enforcer scan  <rule>\n"
                  "  enforcer close <rule> [--dry-run] [--grace-ms N]\n"
                  "\n"
@@ -107,6 +119,54 @@ int apply(brainrot::PlatformAdapter& adapter, const Options& opts, bool act) {
     return failures == 0 ? 0 : 1;
 }
 
+std::string defaultSocketPath() {
+    const char* home = std::getenv("HOME");
+    return std::string(home ? home : "/tmp") + "/.brainrot-reduction/enforcer.sock";
+}
+
+// Phase C4: receives policies and reports them. Enforcing them comes in C5.
+int serve(const std::vector<std::string>& args) {
+    std::string socketPath = defaultSocketPath();
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == "--socket" && i + 1 < args.size()) {
+            socketPath = args[++i];
+        } else {
+            std::cerr << "Unknown or incomplete option: " << args[i] << "\n";
+            usage();
+            return 2;
+        }
+    }
+
+    std::mutex outputMutex;
+    brainrot::MessageHandler handler([&outputMutex](const brainrot::Policy& policy) {
+        std::lock_guard<std::mutex> lock(outputMutex);
+        std::cout << "policy: " << (policy.locked ? "locked" : "unlocked")
+                  << ", dryRun=" << (policy.dryRun ? "yes" : "no")
+                  << ", warning=" << policy.closeWarningMinutes << "min";
+        if (policy.unlockedUntil) std::cout << ", unlockedUntil=" << *policy.unlockedUntil;
+        std::cout << ", apps=[";
+        for (size_t i = 0; i < policy.apps.size(); ++i) {
+            std::cout << (i ? ", " : "") << (policy.apps[i].label.empty() ? "(unlabelled)" : policy.apps[i].label);
+        }
+        std::cout << "]" << std::endl;
+    });
+
+    brainrot::IpcServer server(socketPath, handler);
+    std::string error = server.start();
+    if (!error.empty()) {
+        std::cerr << "Cannot start: " << error << "\n";
+        return 1;
+    }
+
+    std::signal(SIGINT, onServeSignal);
+    std::signal(SIGTERM, onServeSignal);
+    std::cout << "Listening on " << socketPath << ". Ctrl+C to stop." << std::endl;
+    while (!g_stopServing) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    server.stop();
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -115,6 +175,8 @@ int main(int argc, char** argv) {
         usage();
         return 2;
     }
+
+    if (args[0] == "serve") return serve(args);
 
     auto adapter = brainrot::createPlatformAdapter();
 
