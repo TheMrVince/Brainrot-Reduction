@@ -3,10 +3,12 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "enforcer.h"
 #include "ipc_server.h"
 #include "matcher.h"
 #include "message_handler.h"
@@ -22,12 +24,6 @@ brainrot::PlatformAdapter* g_adapter = nullptr;
 
 void onSignal(int) {
     if (g_adapter) g_adapter->stop();
-}
-
-volatile std::sig_atomic_t g_stopServing = 0;
-
-void onServeSignal(int) {
-    g_stopServing = 1;
 }
 
 void usage() {
@@ -124,8 +120,8 @@ std::string defaultSocketPath() {
     return std::string(home ? home : "/tmp") + "/.brainrot-reduction/enforcer.sock";
 }
 
-// Phase C4: receives policies and reports them. Enforcing them comes in C5.
-int serve(const std::vector<std::string>& args) {
+// The daemon: receives policies over IPC and enforces them.
+int serve(const std::vector<std::string>& args, brainrot::PlatformAdapter& adapter) {
     std::string socketPath = defaultSocketPath();
     for (size_t i = 1; i < args.size(); ++i) {
         if (args[i] == "--socket" && i + 1 < args.size()) {
@@ -138,18 +134,32 @@ int serve(const std::vector<std::string>& args) {
     }
 
     std::mutex outputMutex;
-    brainrot::MessageHandler handler([&outputMutex](const brainrot::Policy& policy) {
+    auto log = [&outputMutex](const std::string& message) {
         std::lock_guard<std::mutex> lock(outputMutex);
-        std::cout << "policy: " << (policy.locked ? "locked" : "unlocked")
-                  << ", dryRun=" << (policy.dryRun ? "yes" : "no")
-                  << ", warning=" << policy.closeWarningMinutes << "min";
-        if (policy.unlockedUntil) std::cout << ", unlockedUntil=" << *policy.unlockedUntil;
-        std::cout << ", apps=[";
-        for (size_t i = 0; i < policy.apps.size(); ++i) {
-            std::cout << (i ? ", " : "") << (policy.apps[i].label.empty() ? "(unlabelled)" : policy.apps[i].label);
-        }
-        std::cout << "]" << std::endl;
+        std::cout << message << std::endl;
+    };
+
+    brainrot::Enforcer enforcer(adapter, log, [] {
+        return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
     });
+
+    brainrot::MessageHandler handler([&](const brainrot::Policy& policy) {
+        std::ostringstream line;
+        line << "policy: " << (policy.locked ? "locked" : "unlocked")
+             << ", dryRun=" << (policy.dryRun ? "yes" : "no")
+             << ", warning=" << policy.closeWarningMinutes << "min";
+        if (policy.unlockedUntil) line << ", unlockedUntil=" << *policy.unlockedUntil;
+        line << ", apps=[";
+        for (size_t i = 0; i < policy.apps.size(); ++i) {
+            line << (i ? ", " : "") << (policy.apps[i].label.empty() ? "(unlabelled)" : policy.apps[i].label);
+        }
+        line << "]";
+        log(line.str());
+        enforcer.setPolicy(policy);
+    });
+
+    adapter.onProcessStart([&enforcer](const ProcessInfo& p) { enforcer.onProcessStarted(p); });
 
     brainrot::IpcServer server(socketPath, handler);
     std::string error = server.start();
@@ -158,12 +168,12 @@ int serve(const std::vector<std::string>& args) {
         return 1;
     }
 
-    std::signal(SIGINT, onServeSignal);
-    std::signal(SIGTERM, onServeSignal);
-    std::cout << "Listening on " << socketPath << ". Ctrl+C to stop." << std::endl;
-    while (!g_stopServing) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    enforcer.start();
+    log("Listening on " + socketPath + ". Ctrl+C to stop.");
+    adapter.run();  // returns when a signal calls stop()
 
     server.stop();
+    enforcer.stop();
     return 0;
 }
 
@@ -176,18 +186,18 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    if (args[0] == "serve") return serve(args);
-
     auto adapter = brainrot::createPlatformAdapter();
+    g_adapter = adapter.get();
+    std::signal(SIGINT, onSignal);
+    std::signal(SIGTERM, onSignal);
+
+    if (args[0] == "serve") return serve(args, *adapter);
 
     if (args[0] == "list") {
         return list(*adapter, args.size() > 1 && args[1] == "--all");
     }
 
     if (args[0] == "watch") {
-        g_adapter = adapter.get();
-        std::signal(SIGINT, onSignal);
-        std::signal(SIGTERM, onSignal);
         adapter->onProcessStart([](const ProcessInfo& p) {
             std::cout << "[" << p.detectedBy << "] started " << p.name << " (pid " << p.pid << ", "
                       << (p.identifier.empty() ? "-" : p.identifier) << ")" << std::endl;

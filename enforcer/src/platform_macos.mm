@@ -96,6 +96,11 @@ std::optional<ProcessInfo> describe(pid_t pid) {
     info.path = path;
     info.cmdline = readCmdline(pid);
 
+    struct proc_bsdinfo bsd;
+    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd)) == sizeof(bsd)) {
+        info.parentPid = bsd.pbi_ppid;
+    }
+
     NSRunningApplication* app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
     if (app) {
         info.identifier = toStd(app.bundleIdentifier);

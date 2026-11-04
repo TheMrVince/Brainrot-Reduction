@@ -10,6 +10,7 @@ namespace brainrot {
 
 struct ProcessInfo {
     std::uint32_t pid;
+    std::uint32_t parentPid = 0;
     std::string name;
     std::string path;
     std::string identifier;  // bundle ID on macOS (own, else the enclosing app's), empty on Windows
