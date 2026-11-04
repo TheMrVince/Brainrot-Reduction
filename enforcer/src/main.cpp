@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -20,9 +21,16 @@ bool matches(const ProcessInfo& p, const std::string& query) {
     return p.identifier == query || lower(p.name) == lower(query);
 }
 
+brainrot::PlatformAdapter* g_adapter = nullptr;
+
+void onSignal(int) {
+    if (g_adapter) g_adapter->stop();
+}
+
 void usage() {
     std::cerr << "Usage:\n"
                  "  enforcer list [--all]\n"
+                 "  enforcer watch\n"
                  "  enforcer close [--dry-run] [--grace-ms N] <name-or-bundle-id>\n";
 }
 
@@ -90,6 +98,19 @@ int main(int argc, char** argv) {
             return 2;
         }
         return close(*adapter, query, dryRun, graceMs);
+    }
+
+    if (args[0] == "watch") {
+        g_adapter = adapter.get();
+        std::signal(SIGINT, onSignal);
+        std::signal(SIGTERM, onSignal);
+        adapter->onProcessStart([](const ProcessInfo& p) {
+            std::cout << "[" << p.detectedBy << "] started " << p.name << " (pid " << p.pid << ", "
+                      << (p.identifier.empty() ? "-" : p.identifier) << ")" << std::endl;
+        });
+        std::cout << "Watching for new processes. Ctrl+C to stop." << std::endl;
+        adapter->run();
+        return 0;
     }
 
     usage();
