@@ -41,4 +41,23 @@ class DayClockTest {
     void futureMomentsAreNotToday() {
         assertFalse(clock.isToday(at(11, 5, 12, 0), at(11, 5, 10, 0)));
     }
+
+    @Test
+    void nextDayStartIsTheFollowing4am() {
+        assertEquals(at(11, 6, 4, 0), clock.nextDayStart(at(11, 5, 4, 0)));
+        assertEquals(at(11, 6, 4, 0), clock.nextDayStart(at(11, 5, 23, 59)));
+        assertEquals(at(11, 5, 4, 0), clock.nextDayStart(at(11, 5, 3, 59)));  // still "yesterday"
+    }
+
+    @Test
+    void daysFollowTheCalendarAcrossDaylightSavingChanges() {
+        // Spring forward 2026-03-08: the day that starts on the 7th is 23 hours long.
+        Instant now = ZonedDateTime.of(2026, 3, 7, 10, 0, 0, 0, ZONE).toInstant();
+        assertEquals(ZonedDateTime.of(2026, 3, 8, 4, 0, 0, 0, ZONE).toInstant(), clock.nextDayStart(now));
+        assertEquals(23, java.time.Duration.between(clock.dayStart(now), clock.nextDayStart(now)).toHours());
+
+        // Fall back 2026-11-01: the day that starts on 10-31 is 25 hours long.
+        Instant autumn = ZonedDateTime.of(2026, 10, 31, 10, 0, 0, 0, ZONE).toInstant();
+        assertEquals(25, java.time.Duration.between(clock.dayStart(autumn), clock.nextDayStart(autumn)).toHours());
+    }
 }

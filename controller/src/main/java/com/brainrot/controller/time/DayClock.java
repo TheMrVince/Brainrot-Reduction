@@ -20,16 +20,26 @@ public final class DayClock {
 
     /** The most recent day start at or before {@code now}. */
     public Instant dayStart(Instant now) {
-        ZonedDateTime local = now.atZone(zone);
-        LocalDate date = local.toLocalDate();
-        ZonedDateTime start = date.atTime(dayStartHour, 0).atZone(zone);
-        if (start.isAfter(local)) {
-            start = date.minusDays(1).atTime(dayStartHour, 0).atZone(zone);
-        }
-        return start.toInstant();
+        return startOf(currentDay(now));
+    }
+
+    /** The first day start after {@code now}: when today ends. Follows the calendar, so a day can be 23 or 25 hours. */
+    public Instant nextDayStart(Instant now) {
+        return startOf(currentDay(now).plusDays(1));
     }
 
     public boolean isToday(Instant moment, Instant now) {
         return !moment.isBefore(dayStart(now)) && !moment.isAfter(now);
+    }
+
+    /** The calendar date whose 4 AM (or configured hour) started the day that contains {@code now}. */
+    private LocalDate currentDay(Instant now) {
+        ZonedDateTime local = now.atZone(zone);
+        LocalDate date = local.toLocalDate();
+        return startOf(date).isAfter(now) ? date.minusDays(1) : date;
+    }
+
+    private Instant startOf(LocalDate date) {
+        return date.atTime(dayStartHour, 0).atZone(zone).toInstant();
     }
 }

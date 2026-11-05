@@ -19,8 +19,17 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) throws InterruptedException {
+        if (args.length >= 1 && args[0].equals("status")) {
+            System.exit(StatusCommand.status(List.of(args).subList(1, args.length)));
+        }
+        if (args.length >= 1 && args[0].equals("unlock")) {
+            System.exit(StatusCommand.unlock(List.of(args).subList(1, args.length)));
+        }
         if (args.length != 1) {
-            System.err.println("Usage: solved-today <leetcode-username>");
+            System.err.println("Usage:\n"
+                    + "  status [--config FILE] [--state FILE]\n"
+                    + "  unlock [--config FILE] [--state FILE] <phrase>\n"
+                    + "  <leetcode-username>   (just check one user, no config needed)");
             System.exit(2);
         }
 
