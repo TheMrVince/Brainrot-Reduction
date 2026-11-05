@@ -27,8 +27,8 @@ public final class Main {
         }
         if (args.length != 1) {
             System.err.println("Usage:\n"
-                    + "  status [--config FILE] [--state FILE]\n"
-                    + "  unlock [--config FILE] [--state FILE] <phrase>\n"
+                    + "  status [--send] [--config FILE] [--state FILE] [--socket FILE]\n"
+                    + "  unlock [--send] [--config FILE] [--state FILE] [--socket FILE] <phrase>\n"
                     + "  <leetcode-username>   (just check one user, no config needed)");
             System.exit(2);
         }

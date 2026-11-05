@@ -3,6 +3,7 @@ package com.brainrot.controller;
 import com.brainrot.controller.config.Config;
 import com.brainrot.controller.config.ConfigException;
 import com.brainrot.controller.config.ConfigStore;
+import com.brainrot.controller.ipc.EnforcerClient;
 import com.brainrot.controller.leetcode.LeetCodeClient;
 import com.brainrot.controller.policy.CheckResult;
 import com.brainrot.controller.policy.EmergencyUnlockResult;
@@ -15,6 +16,7 @@ import com.brainrot.controller.time.DayClock;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -23,15 +25,17 @@ import java.util.List;
 
 /**
  * Command-line view of the decision: {@code status} asks LeetCode, updates the saved state and shows
- * the policy that would go to the enforcer; {@code unlock} tries an emergency unlock. The tray UI
- * and scheduler will drive the same engine later.
+ * the policy that would go to the enforcer; {@code unlock} tries an emergency unlock. With
+ * {@code --send} the policy is also delivered to the running enforcer. The tray UI and scheduler
+ * will drive the same engine later.
  */
 final class StatusCommand {
     private static final int FETCH_LIMIT = 20;
+    private static final int EXIT_ENFORCER_UNREACHABLE = 3;
     private static final DateTimeFormatter DISPLAY =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
-    private record Options(Path config, Path state, List<String> rest) {}
+    private record Options(Path config, Path state, Path socket, boolean send, List<String> rest) {}
 
     private StatusCommand() {}
 
@@ -52,23 +56,23 @@ final class StatusCommand {
         if (!saveState(setup, state)) return 1;
 
         System.out.println("Day started at " + DISPLAY.format(setup.clock.dayStart(now)));
-        printDecision(setup, state, now);
-        return 0;
+        Policy policy = printDecision(setup, state, now);
+        return setup.options.send ? deliver(setup, policy) : 0;
     }
 
     static int unlock(List<String> args) {
         Setup setup = Setup.from(args);
         if (setup == null) return 2;
         Instant now = Instant.now();
-        String phrase = setup.rest.isEmpty() ? null : String.join(" ", setup.rest);
+        String phrase = setup.options.rest.isEmpty() ? null : String.join(" ", setup.options.rest);
 
         EmergencyUnlockResult result = setup.engine.requestEmergencyUnlock(setup.state, phrase, now);
         switch (result) {
             case EmergencyUnlockResult.Granted granted -> {
                 if (!saveState(setup, granted.state())) return 1;
                 System.out.println("Emergency unlock granted until " + DISPLAY.format(granted.until()));
-                printDecision(setup, granted.state(), now);
-                return 0;
+                Policy policy = printDecision(setup, granted.state(), now);
+                return setup.options.send ? deliver(setup, policy) : 0;
             }
             case EmergencyUnlockResult.WrongPhrase w -> System.out.println("Not unlocked: the phrase did not match.");
             case EmergencyUnlockResult.NotNeeded n -> System.out.println("Not needed: today's problem is already solved.");
@@ -81,7 +85,7 @@ final class StatusCommand {
         return 1;
     }
 
-    private static void printDecision(Setup setup, State state, Instant now) {
+    private static Policy printDecision(Setup setup, State state, Instant now) {
         Policy policy = setup.engine.decide(state, now);
         if (policy.isUnlockedAt(now)) {
             String why = setup.engine.solvedToday(state, now) ? "solved today" : "emergency unlock";
@@ -91,6 +95,28 @@ final class StatusCommand {
         }
         System.out.println("Policy message for the enforcer:");
         System.out.println(PolicyJson.toSetPolicyMessage(policy));
+        return policy;
+    }
+
+    /** Sends the policy to the running enforcer. The saved state is already updated either way. */
+    private static int deliver(Setup setup, Policy policy) {
+        try (EnforcerClient client = new EnforcerClient(setup.options.socket, Duration.ofSeconds(5),
+                event -> System.out.println("Enforcer event: " + event))) {
+            return switch (client.sendPolicy(policy)) {
+                case EnforcerClient.Reply.Accepted accepted -> {
+                    System.out.println("Enforcer accepted the policy.");
+                    yield 0;
+                }
+                case EnforcerClient.Reply.Rejected rejected -> {
+                    System.out.println("Enforcer rejected the policy: " + rejected.message());
+                    yield EXIT_ENFORCER_UNREACHABLE;
+                }
+            };
+        } catch (IOException e) {
+            System.out.println("Could not deliver the policy: " + e.getMessage());
+            System.out.println("The enforcer applies the last policy it received, and will get this one when you send it again.");
+            return EXIT_ENFORCER_UNREACHABLE;
+        }
     }
 
     private static CheckResult check(Config config) {
@@ -116,30 +142,30 @@ final class StatusCommand {
 
     /** Everything a command needs, loaded from the config and state files. */
     private static final class Setup {
+        final Options options;
         final Config config;
         final StateStore store;
         final State state;
         final DayClock clock;
         final PolicyEngine engine;
-        final List<String> rest;
 
-        private Setup(Config config, StateStore store, State state, List<String> rest) {
+        private Setup(Options options, Config config, StateStore store, State state) {
+            this.options = options;
             this.config = config;
             this.store = store;
             this.state = state;
-            this.rest = rest;
             this.clock = new DayClock(ZoneId.systemDefault(), config.dayStartHour());
             this.engine = new PolicyEngine(config, clock);
         }
 
-        /** Null (after printing why) if the config or state cannot be used. */
+        /** Null (after printing why) if the options, config or state cannot be used. */
         static Setup from(List<String> args) {
             Options options = parse(args);
             if (options == null) return null;
             try {
                 Config config = ConfigStore.load(options.config);
                 StateStore store = new StateStore(options.state);
-                return new Setup(config, store, store.load(), options.rest);
+                return new Setup(options, config, store, store.load());
             } catch (ConfigException e) {
                 System.err.println(e.getMessage());
             } catch (IOException e) {
@@ -150,17 +176,23 @@ final class StatusCommand {
     }
 
     private static Options parse(List<String> args) {
-        Path dir = Path.of(System.getProperty("user.home"), ".brainrot-reduction");
-        Path config = dir.resolve("config.json");
-        Path state = dir.resolve("state.json");
+        Path config = DataDir.config();
+        Path state = DataDir.state();
+        Path socket = DataDir.enforcerSocket();
+        boolean send = false;
         List<String> rest = new ArrayList<>();
 
         for (int i = 0; i < args.size(); i++) {
             String arg = args.get(i);
-            if (arg.equals("--config") && i + 1 < args.size()) {
+            boolean hasValue = i + 1 < args.size();
+            if (arg.equals("--config") && hasValue) {
                 config = Path.of(args.get(++i));
-            } else if (arg.equals("--state") && i + 1 < args.size()) {
+            } else if (arg.equals("--state") && hasValue) {
                 state = Path.of(args.get(++i));
+            } else if (arg.equals("--socket") && hasValue) {
+                socket = Path.of(args.get(++i));
+            } else if (arg.equals("--send")) {
+                send = true;
             } else if (arg.startsWith("--")) {
                 System.err.println("Unknown or incomplete option: " + arg);
                 return null;
@@ -168,6 +200,6 @@ final class StatusCommand {
                 rest.add(arg);
             }
         }
-        return new Options(config, state, rest);
+        return new Options(config, state, socket, send, rest);
     }
 }
