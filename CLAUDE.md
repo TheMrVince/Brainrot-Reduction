@@ -55,11 +55,11 @@ controller/ (Java 21, Gradle)                  enforcer/ (C++20, CMake)
 ./gradlew :controller:test                                   # gradlew.bat on Windows; 108 tests
 cmake -S enforcer -B enforcer/build -DCMAKE_BUILD_TYPE=Release
 cmake --build enforcer/build --config Release --parallel
-ctest --test-dir enforcer/build --build-config Release --output-on-failure   # 5 suites
+ctest --test-dir enforcer/build --build-config Release --output-on-failure   # 5 suites; 6 on Windows
 ```
 
-`-DBRAINROT_CORE_ONLY=ON` builds only the portable core, the socket transport and their tests (what CI does on
-Linux and Windows today), because no adapter exists there yet.
+`-DBRAINROT_CORE_ONLY=ON` builds only the portable core, the socket transport and their tests. Linux gets that
+anyway, because it has no adapter. Windows adds `platform_windows_test`, which closes only child copies of itself.
 
 On Windows: CMake picks the Visual Studio generator and finds MSVC by itself, so no Developer PowerShell is needed.
 To call `cl` directly, run `Launch-VsDevShell.ps1` from the path `vswhere -latest -products * -property installationPath`
@@ -74,14 +74,18 @@ Done on macOS: J1 to J7 (controller), C1 to C5 (enforcer), P1 (CI), P2 (launchd 
 1. **C6a, socket transport (done).** `src/ipc_server_windows.cpp`, the Winsock `AF_UNIX` twin of the POSIX file.
    `ipc_server_test` passes on Windows, and the real Java `EnforcerClient` was checked against it by hand.
    The socket handle is `std::intptr_t` because a Windows `SOCKET` is 64 bits. Keep socket paths under about 100 bytes.
-2. **C6b, adapter** (`src/platform_windows.cpp`), then `enforcer.exe` builds. Planned approach:
-   - list processes with Toolhelp snapshots; path via `QueryFullProcessImageNameW`; start time via `GetProcessTimes`
-     (convert to Unix seconds); command line via `NtQueryInformationProcess(ProcessCommandLineInformation)`
-   - `name` is the exe file name including `.exe`; paths use backslashes, so `pathPrefix` rules must too
-   - close politely with `WM_CLOSE` to the process's top-level windows, wait the grace period, then `TerminateProcess`;
-     no windows means `TerminateProcess` straight away
-   - launch detection by polling a 1 s process-list diff only (same dedupe by pid as macOS), so a blocked app may flash open briefly
-   - add an adapter test that spawns a real child process and checks list, command line and terminate
+2. **C6b, adapter (done).** `src/platform_windows.cpp`; `enforcer.exe` builds and `list`, `watch`, `scan`, `close` were
+   tried on Calculator. How it works:
+   - Toolhelp snapshot; path via `QueryFullProcessImageNameW`; start time via `GetProcessTimes`; command line via
+     `NtQueryInformationProcess(ProcessCommandLineInformation)`. Processes it cannot open are left out, as on macOS.
+   - `name` is the exe file name including `.exe`; paths use backslashes, so `pathPrefix` rules must too.
+     `enforcer list` on Windows shows processes outside `C:\Windows\`, with their paths.
+   - Close: `WM_CLOSE` to the process's visible, unowned top-level windows, wait the grace period, then
+     `TerminateProcess` (exit code 1). No such window means `TerminateProcess` at once. Store apps such as Calculator
+     have their window in `ApplicationFrameHost.exe`, so they are always killed directly.
+   - `ownProcessChain` stops at a "parent" created after its child, because Windows reuses the pids of exited parents.
+   - Launch detection is a 1 s process-list diff only, so a blocked app may flash open briefly.
+   - `notify` does nothing until C6c.
 3. **C6c, the rest:** notification (tray balloon via `Shell_NotifyIconW`; unverified visually until tried on a real desktop),
    Windows entries in the protection list (explorer, taskmgr, shells, Windows Terminal, VS Code, the controller's own
    `java` via the `com.brainrot.controller` command-line marker, `C:\Windows\`), default folder from `%USERPROFILE%`

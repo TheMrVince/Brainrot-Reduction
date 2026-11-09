@@ -1,3 +1,4 @@
+#include <cctype>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -81,6 +82,23 @@ Options parseOptions(const std::vector<std::string>& args) {
     return opts;
 }
 
+#ifdef _WIN32
+// Windows has no bundle IDs, so "apps" are the processes that do not live in the Windows folder,
+// and the path is shown instead: it is what a pathPrefix rule would match.
+bool looksLikeAnApp(const ProcessInfo& p) {
+    std::string path = p.path;
+    for (char& c : path) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return path.rfind("c:\\windows\\", 0) != 0;
+}
+
+int list(brainrot::PlatformAdapter& adapter, bool all) {
+    for (const auto& p : adapter.listProcesses()) {
+        if (!all && !looksLikeAnApp(p)) continue;
+        std::cout << p.pid << "\t" << p.name << "\t" << p.path << "\n";
+    }
+    return 0;
+}
+#else
 int list(brainrot::PlatformAdapter& adapter, bool all) {
     for (const auto& p : adapter.listProcesses()) {
         if (!all && p.identifier.empty()) continue;
@@ -88,6 +106,7 @@ int list(brainrot::PlatformAdapter& adapter, bool all) {
     }
     return 0;
 }
+#endif
 
 // scan and close share this: both only ever act on what the matcher says to block.
 int apply(brainrot::PlatformAdapter& adapter, const Options& opts, bool act) {
