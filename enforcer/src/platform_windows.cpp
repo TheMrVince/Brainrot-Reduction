@@ -4,12 +4,14 @@
 //  - New processes are found by diffing the process list every second (Windows has no cheap launch
 //    notification without admin rights), so a blocked app may be visible for up to a second.
 //  - Closing asks politely first (WM_CLOSE to the app's visible windows), then uses TerminateProcess.
+//  - Notifications are tray balloons, which Windows 10 and 11 turn into toasts.
 
 #include "platform_adapter.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <shellapi.h>
 #include <tlhelp32.h>
 #include <winternl.h>
 
@@ -172,6 +174,50 @@ bool hasExited(HANDLE process, DWORD waitMs) {
     return ::WaitForSingleObject(process, waitMs) == WAIT_OBJECT_0;
 }
 
+std::wstring toWide(const std::string& text) {
+    if (text.empty()) return {};
+    int chars = ::MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (chars <= 0) return {};
+    std::wstring out(static_cast<size_t>(chars), L'\0');
+    ::MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), chars);
+    return out;
+}
+
+// A tray icon with a balloon, which Windows 10 and 11 show as a toast notification. The icon needs a
+// window to belong to, so a hidden message-only one is made, kept for a few seconds while Windows
+// picks the balloon up, then removed. Runs on its own thread so the caller never waits.
+void showBalloon(const std::string& title, const std::string& message) {
+    static std::atomic<UINT> nextIconId{1};
+    constexpr auto kIconLifetime = std::chrono::seconds(10);
+    constexpr WORD kWarningIcon = 32515;  // IDI_WARNING, spelled out so it does not depend on UNICODE
+
+    HWND window = ::CreateWindowExW(0, L"STATIC", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                                    ::GetModuleHandleW(nullptr), nullptr);
+    if (!window) return;
+
+    NOTIFYICONDATAW data{};
+    data.cbSize = sizeof(data);
+    data.hWnd = window;
+    data.uID = nextIconId++;
+    data.uFlags = NIF_ICON | NIF_TIP | NIF_INFO;
+    data.hIcon = ::LoadIconW(nullptr, MAKEINTRESOURCEW(kWarningIcon));
+    data.dwInfoFlags = NIIF_WARNING;
+    wcsncpy_s(data.szTip, L"Brainrot Reduction", _TRUNCATE);
+    wcsncpy_s(data.szInfoTitle, toWide(title).c_str(), _TRUNCATE);
+    wcsncpy_s(data.szInfo, toWide(message).c_str(), _TRUNCATE);
+
+    if (::Shell_NotifyIconW(NIM_ADD, &data)) {
+        auto deadline = std::chrono::steady_clock::now() + kIconLifetime;
+        while (std::chrono::steady_clock::now() < deadline) {
+            MSG msg;
+            while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) ::DispatchMessageW(&msg);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        ::Shell_NotifyIconW(NIM_DELETE, &data);
+    }
+    ::DestroyWindow(window);
+}
+
 class WindowsAdapter : public PlatformAdapter {
 public:
     std::vector<ProcessInfo> listProcesses() override {
@@ -229,8 +275,9 @@ public:
 
     void stop() override { stopping_ = true; }
 
-    // Arrives in C6c (a tray balloon). Until then warnings are only logged by the enforcer.
-    void notify(const std::string&, const std::string&) override {}
+    void notify(const std::string& title, const std::string& message) override {
+        std::thread([title, message] { showBalloon(title, message); }).detach();
+    }
 
     bool terminate(std::uint32_t pid, int graceTimeoutMs) override {
         if (pid == 0 || pid == kSystemPid || pid == ::GetCurrentProcessId()) return false;

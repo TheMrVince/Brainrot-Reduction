@@ -87,3 +87,12 @@ jobs:
             bash -n "$script"
             echo "ok: $script"
           done
+      - name: PowerShell syntax check
+        shell: pwsh
+        run: |
+          foreach ($script in Get-ChildItem packaging/windows/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Error "$($script.Name):$($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
+            Write-Host "ok: $($script.Name)"
+          }

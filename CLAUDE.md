@@ -85,17 +85,29 @@ Done on macOS: J1 to J7 (controller), C1 to C5 (enforcer), P1 (CI), P2 (launchd 
      have their window in `ApplicationFrameHost.exe`, so they are always killed directly.
    - `ownProcessChain` stops at a "parent" created after its child, because Windows reuses the pids of exited parents.
    - Launch detection is a 1 s process-list diff only, so a blocked app may flash open briefly.
-   - `notify` does nothing until C6c.
-3. **C6c, the rest:** notification (tray balloon via `Shell_NotifyIconW`; unverified visually until tried on a real desktop),
-   Windows entries in the protection list (explorer, taskmgr, shells, Windows Terminal, VS Code, the controller's own
-   `java` via the `com.brainrot.controller` command-line marker, `C:\Windows\`), default folder from `%USERPROFILE%`
-   (`main.cpp` still reads `HOME`), and a per-user Task Scheduler "at logon" script in `packaging/windows/`.
+3. **C6c, the rest (done).**
+   - Protection list (`matcher.cpp`): anything under `X:\Windows\` and `X:\Program Files\PowerShell\` on any drive, plus
+     path fragments for VS Code, Windows Terminal, JetBrains and Claude (their paths contain the user name). The
+     controller is protected by its `com.brainrot.controller` command-line marker, as on macOS.
+   - `notify` shows a tray balloon (`Shell_NotifyIconW` on a hidden message-only window, kept 10 s), which Windows
+     turns into a toast. Dry run never notifies, so test it with `"dryRun": false` on Calculator.
+   - The data folder comes from `%USERPROFILE%`, which is Java's `user.home` on Windows.
+   - `serve --log-file PATH` appends all output to a file. `enforcerw.exe` is the same program with no console window.
+   - `packaging/windows/install.ps1` and `uninstall.ps1`: per-user scheduled tasks, no admin rights needed. The
+     enforcer task has a logon trigger plus a time trigger repeating every minute, with "do not start a second copy",
+     which restarts it within a minute if killed. The controller task runs
+     `javaw -cp lib\* com.brainrot.controller.Main tray` at logon only.
+   - Checked end to end on Windows with `enforcer serve` and the Java client: warning, close after 59 s, relaunch
+     closed in 1 s. The installed tasks were tested on the user's machine (dry run, blocking Discord): the controller
+     sent a locked policy, the enforcer logged "would close" for Discord, and a killed enforcer came back after 48 s.
+     Not yet seen: a real logon after install.
 
 Then P3: `jpackage` installers (a `.msi` on Windows, a `.dmg` on macOS) so a machine needs no JDK or CMake.
 
 Known gaps worth knowing: the enforcer never sends `blocked` or `warning` events to the controller (the Java client
 already passes unknown lines to a listener); nothing stops two tray instances; deadlines live in memory, so restarting
-the enforcer restarts a countdown.
+the enforcer restarts a countdown. On Windows the controller's output is not saved anywhere (javaw has no console and
+the controller has no log file), and the controller is not restarted after a crash.
 
 ## Gotchas learned the hard way
 
@@ -104,3 +116,8 @@ the enforcer restarts a countdown.
 - macOS ships bash 3.2 and BSD `sed` (`sed -i ''`); keep `packaging/macos/*.sh` compatible.
 - The tool harness blocks `rm` on a shell-variable path; avoid it in scripts you run through it.
 - `launchd` only restarts a `KeepAlive: {SuccessfulExit: false}` job after a failure, so tray "Quit" stays quit.
+- MSVC's `freopen_s` opens files without sharing, so redirecting stdout and stderr to the same file fails; use `freopen`.
+- A Task Scheduler logon trigger's repetition only starts when that trigger fires, so it does nothing until the
+  next login; put the repetition on a separate time trigger.
+- Windows' default execution policy blocks unsigned `.ps1` files; run them with `powershell -ExecutionPolicy Bypass -File`.
+- A Windows session started before an install keeps its old PATH; set `JAVA_HOME` or the full path to `cmake` by hand.

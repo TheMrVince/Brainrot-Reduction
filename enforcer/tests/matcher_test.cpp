@@ -102,6 +102,43 @@ void protectedProcessesAreNeverBlocked() {
     CHECK(matcher.shouldBlock(proc(1104, "java", "/x/java", "", kGradleDaemonCmd)) != nullptr);
 }
 
+// Real paths from a Windows 11 machine. A rule that matches everything still closes none of these.
+void windowsEssentialsAreNeverBlocked() {
+    AppRule everything{"Everything", "", "", "", {}};
+    everything.cmdlineContains = {"."};  // matches any command line that has a dot in it
+    AppRule byName{"By name", "", "explorer.exe", "", {}};
+    Matcher matcher({everything, byName}, {});
+
+    auto blocked = [&](const char* name, const char* path) {
+        return matcher.shouldBlock(proc(5000, name, path, "", std::string(path) + " --x")) != nullptr;
+    };
+
+    CHECK(!blocked("explorer.exe", "C:\\Windows\\explorer.exe"));
+    CHECK(!blocked("Taskmgr.exe", "C:\\Windows\\System32\\Taskmgr.exe"));
+    CHECK(!blocked("cmd.exe", "C:\\Windows\\System32\\cmd.exe"));
+    CHECK(!blocked("powershell.exe", "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"));
+    CHECK(!blocked("explorer.exe", "D:\\WINDOWS\\explorer.exe"));  // other drive, other case
+    CHECK(!blocked("pwsh.exe", "C:\\Program Files\\PowerShell\\7\\pwsh.exe"));
+    CHECK(!blocked("WindowsTerminal.exe",
+                   "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.21.3231.0_x64__8wekyb3d8bbwe\\WindowsTerminal.exe"));
+    CHECK(!blocked("Code.exe", "C:\\Users\\vince\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"));
+    CHECK(!blocked("idea64.exe", "C:\\Program Files\\JetBrains\\IntelliJ IDEA 2026.2\\bin\\idea64.exe"));
+    CHECK(!blocked("claude.exe", "C:\\Program Files\\WindowsApps\\Claude_4.23118.0.0_x64__pzs8sxrjxfjjc\\app\\claude.exe"));
+    CHECK(!blocked("claude.exe",
+                   "C:\\Users\\vince\\AppData\\Local\\Claude-Data\\claude_pzs8sxrjxfjjc\\claude-code\\2.1.317\\x\\claude.exe"));
+
+    // The controller is java.exe from a JDK folder, recognised by its main class.
+    const char* jdk = "C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.13.9-hotspot\\bin\\javaw.exe";
+    CHECK(matcher.shouldBlock(proc(5001, "javaw.exe", jdk, "", std::string(jdk) + " -cp lib\\* com.brainrot.controller.Main tray")) == nullptr);
+
+    // Ordinary apps stay blockable, including ones that merely look similar.
+    CHECK(blocked("Discord.exe", "C:\\Users\\vince\\AppData\\Local\\Discord\\app-1.0.9200\\Discord.exe"));
+    CHECK(blocked("CalculatorApp.exe",
+                  "C:\\Program Files\\WindowsApps\\Microsoft.WindowsCalculator_11.2607.0.0_x64__8wekyb3d8bbwe\\CalculatorApp.exe"));
+    CHECK(blocked("game.exe", "C:\\Games\\windows\\game.exe"));           // \windows\ not right after the drive
+    CHECK(blocked("game.exe", "C:\\Program Files\\Windows Game\\game.exe"));
+}
+
 void ownProcessChainAndLowPidsAreProtected() {
     Matcher matcher({AppRule{"Any", "", "zsh", "", {}}}, {4242});
 
@@ -121,6 +158,7 @@ int main() {
     pathPrefixAndProcessName();
     ruleWithoutCriteriaMatchesNothing();
     protectedProcessesAreNeverBlocked();
+    windowsEssentialsAreNeverBlocked();
     ownProcessChainAndLowPidsAreProtected();
 
     if (failures == 0) std::cout << "matcher tests passed\n";

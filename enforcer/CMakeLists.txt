@@ -52,9 +52,14 @@ if(APPLE AND NOT BRAINROT_CORE_ONLY)
 elseif(WIN32 AND NOT BRAINROT_CORE_ONLY)
     # A library so the adapter test can link it without main.cpp.
     add_library(enforcer_platform STATIC src/platform_windows.cpp)
-    target_link_libraries(enforcer_platform PUBLIC enforcer_core user32)
+    target_link_libraries(enforcer_platform PUBLIC enforcer_core user32 shell32)
     add_executable(enforcer src/main.cpp)
     target_link_libraries(enforcer PRIVATE enforcer_platform enforcer_ipc)
+    # The same program without a console window, for starting at login (like javaw.exe beside java.exe).
+    # It keeps main() as its entry point; its output goes to `serve --log-file`.
+    add_executable(enforcerw WIN32 src/main.cpp)
+    target_link_libraries(enforcerw PRIVATE enforcer_platform enforcer_ipc)
+    target_link_options(enforcerw PRIVATE /ENTRY:mainCRTStartup)
 else()
     message(STATUS "Building the portable core and its tests only (no platform adapter for ${CMAKE_SYSTEM_NAME} yet)")
 endif()
