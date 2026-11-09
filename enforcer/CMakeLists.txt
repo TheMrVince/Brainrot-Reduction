@@ -34,8 +34,11 @@ add_library(enforcer_core STATIC
 target_include_directories(enforcer_core PUBLIC include)
 target_link_libraries(enforcer_core PRIVATE nlohmann_json::nlohmann_json)
 
-# The local-socket transport: POSIX today, a Windows one comes with C6.
-if(UNIX)
+# The local-socket transport: an AF_UNIX socket on every OS, through Winsock on Windows.
+if(WIN32)
+    add_library(enforcer_ipc STATIC src/ipc_server_windows.cpp)
+    target_link_libraries(enforcer_ipc PUBLIC enforcer_core ws2_32)
+else()
     add_library(enforcer_ipc STATIC src/ipc_server_posix.cpp)
     target_link_libraries(enforcer_ipc PUBLIC enforcer_core)
 endif()
@@ -68,8 +71,6 @@ add_executable(enforcer_test tests/enforcer_test.cpp)
 target_link_libraries(enforcer_test PRIVATE enforcer_core)
 add_test(NAME enforcer COMMAND enforcer_test)
 
-if(UNIX)
-    add_executable(ipc_server_test tests/ipc_server_test.cpp)
-    target_link_libraries(ipc_server_test PRIVATE enforcer_ipc nlohmann_json::nlohmann_json)
-    add_test(NAME ipc_server COMMAND ipc_server_test)
-endif()
+add_executable(ipc_server_test tests/ipc_server_test.cpp)
+target_link_libraries(ipc_server_test PRIVATE enforcer_ipc nlohmann_json::nlohmann_json)
+add_test(NAME ipc_server COMMAND ipc_server_test)

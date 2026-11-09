@@ -6,6 +6,7 @@ exactly one response line, in order. Several messages may share a write, and one
 arrive in pieces.
 
 - Default socket: `~/.brainrot-reduction/enforcer.sock` (directory mode 0700, socket mode 0600, so only the current user can connect).
+  On Windows it is a Winsock `AF_UNIX` socket with no mode bits; it inherits the user profile folder's access list instead.
 - A second enforcer refuses to start while one is listening; a socket left by a crashed run is replaced.
 - Messages over 1 MiB without a newline drop the connection.
 

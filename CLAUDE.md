@@ -58,8 +58,12 @@ cmake --build enforcer/build --config Release --parallel
 ctest --test-dir enforcer/build --build-config Release --output-on-failure   # 5 suites
 ```
 
-`-DBRAINROT_CORE_ONLY=ON` builds only the portable core and its tests (what CI does on Linux and Windows today).
-The Windows and Linux CI jobs build exactly that, because no adapter exists there yet.
+`-DBRAINROT_CORE_ONLY=ON` builds only the portable core, the socket transport and their tests (what CI does on
+Linux and Windows today), because no adapter exists there yet.
+
+On Windows: CMake picks the Visual Studio generator and finds MSVC by itself, so no Developer PowerShell is needed.
+To call `cl` directly, run `Launch-VsDevShell.ps1` from the path `vswhere -latest -products * -property installationPath`
+prints (`-products *` is required for a Build Tools-only install).
 
 ## Status
 
@@ -67,8 +71,9 @@ Done on macOS: J1 to J7 (controller), C1 to C5 (enforcer), P1 (CI), P2 (launchd 
 
 **Remaining: C6 (Windows) and P3 (installers).** C6 plan, three commits, each verified natively on Windows:
 
-1. **C6a, socket transport.** Winsock `AF_UNIX` twin of `src/ipc_server_posix.cpp`; then `ipc_server_test` runs on Windows.
-   The Java client already works on Windows (`UnixDomainSocketAddress`). Keep socket paths under about 100 bytes.
+1. **C6a, socket transport (done).** `src/ipc_server_windows.cpp`, the Winsock `AF_UNIX` twin of the POSIX file.
+   `ipc_server_test` passes on Windows, and the real Java `EnforcerClient` was checked against it by hand.
+   The socket handle is `std::intptr_t` because a Windows `SOCKET` is 64 bits. Keep socket paths under about 100 bytes.
 2. **C6b, adapter** (`src/platform_windows.cpp`), then `enforcer.exe` builds. Planned approach:
    - list processes with Toolhelp snapshots; path via `QueryFullProcessImageNameW`; start time via `GetProcessTimes`
      (convert to Unix seconds); command line via `NtQueryInformationProcess(ProcessCommandLineInformation)`

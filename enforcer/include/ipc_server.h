@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <thread>
 
@@ -9,7 +10,7 @@
 namespace brainrot {
 
 // Listens on a local socket, reads newline-terminated messages and writes back the
-// handler's one-line responses. Implemented per OS (ipc_server_posix.cpp today).
+// handler's one-line responses. Implemented per OS (ipc_server_posix.cpp, ipc_server_windows.cpp).
 class IpcServer {
 public:
     IpcServer(std::string socketPath, const MessageHandler& handler);
@@ -25,11 +26,12 @@ public:
 
 private:
     void acceptLoop();
-    void serveConnection(int fd);
+    void serveConnection(std::intptr_t handle);
 
     std::string path_;
     const MessageHandler& handler_;
-    int listenFd_ = -1;
+    // A POSIX file descriptor or a Windows SOCKET (64 bits wide), whichever this OS uses; -1 when closed.
+    std::intptr_t listenFd_ = -1;
     std::thread acceptThread_;
     std::atomic<bool> stopping_{false};
     std::atomic<int> activeConnections_{0};

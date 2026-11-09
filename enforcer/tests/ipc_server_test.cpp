@@ -1,10 +1,18 @@
 #include <nlohmann/json.hpp>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <winsock2.h>
+#include <windows.h>
+#include <afunix.h>
+#else
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -33,19 +41,53 @@ static int failures = 0;
 
 namespace {
 
+// The few socket calls whose names differ between POSIX and Winsock.
+#ifdef _WIN32
+using Socket = SOCKET;
+constexpr Socket kNoSocket = INVALID_SOCKET;
+void closeSocket(Socket s) { ::closesocket(s); }
+bool waitReadable(Socket s, int timeoutMs) {
+    fd_set readable;
+    FD_ZERO(&readable);
+    FD_SET(s, &readable);
+    timeval timeout{timeoutMs / 1000, (timeoutMs % 1000) * 1000};
+    return ::select(0, &readable, nullptr, nullptr, &timeout) > 0;
+}
+// A Windows socket file is a reparse point that std::filesystem cannot always inspect.
+bool pathExists(const std::string& path) {
+    return ::GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+#else
+using Socket = int;
+constexpr Socket kNoSocket = -1;
+void closeSocket(Socket s) { ::close(s); }
+bool waitReadable(Socket s, int timeoutMs) {
+    pollfd pfd{s, POLLIN, 0};
+    return ::poll(&pfd, 1, timeoutMs) > 0;
+}
+bool pathExists(const std::string& path) {
+    return std::filesystem::exists(path);
+}
+#endif
+
+sockaddr_un addressOf(const std::string& path) {
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    return addr;
+}
+
 class Client {
 public:
     explicit Client(const std::string& path) {
         fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        sockaddr_un addr{};
-        addr.sun_family = AF_UNIX;
-        std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+        sockaddr_un addr = addressOf(path);
         connected_ = ::connect(fd_, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0;
     }
-    ~Client() { if (fd_ >= 0) ::close(fd_); }
+    ~Client() { if (fd_ != kNoSocket) closeSocket(fd_); }
 
     bool connected() const { return connected_; }
-    void send(const std::string& data) { (void)::write(fd_, data.data(), data.size()); }
+    void send(const std::string& data) { (void)::send(fd_, data.data(), static_cast<int>(data.size()), 0); }
 
     // One response line, or "" if none arrives within the timeout.
     std::string readLine(int timeoutMs = 2000) {
@@ -54,10 +96,9 @@ public:
             auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
                 deadline - std::chrono::steady_clock::now()).count();
             if (left <= 0) return "";
-            pollfd pfd{fd_, POLLIN, 0};
-            if (::poll(&pfd, 1, static_cast<int>(left)) <= 0) return "";
+            if (!waitReadable(fd_, static_cast<int>(left))) return "";
             char chunk[1024];
-            ssize_t n = ::read(fd_, chunk, sizeof(chunk));
+            auto n = ::recv(fd_, chunk, static_cast<int>(sizeof(chunk)), 0);
             if (n <= 0) return "";
             buffer_.append(chunk, static_cast<size_t>(n));
         }
@@ -68,15 +109,25 @@ public:
     }
 
 private:
-    int fd_ = -1;
+    Socket fd_ = kNoSocket;
     bool connected_ = false;
     std::string buffer_;
 };
 
+// Short on purpose: socket paths are limited to about 100 bytes.
 std::string makeTempDir() {
-    std::string pattern = "/tmp/brainrot-test-XXXXXX";  // short: socket paths are limited to ~100 bytes
+#ifdef _WIN32
+    char base[MAX_PATH + 1];
+    if (::GetTempPathA(sizeof(base), base) == 0) return "";
+    std::string dir = std::string(base) + "brainrot-test-" + std::to_string(::GetCurrentProcessId());
+    std::error_code ec;
+    std::filesystem::create_directory(dir, ec);
+    return ec ? "" : dir;
+#else
+    std::string pattern = "/tmp/brainrot-test-XXXXXX";
     char* dir = ::mkdtemp(pattern.data());
     return dir ? dir : "";
+#endif
 }
 
 void answersPingAndAppliesPolicy(const std::string& socketPath) {
@@ -85,9 +136,13 @@ void answersPingAndAppliesPolicy(const std::string& socketPath) {
     IpcServer server(socketPath, handler);
     CHECK(server.start().empty());
 
+#ifndef _WIN32
     struct stat st{};
     CHECK(::stat(socketPath.c_str(), &st) == 0);
     CHECK((st.st_mode & 0777) == 0600);  // only the current user may connect
+#else
+    CHECK(pathExists(socketPath));  // no mode bits on Windows; the profile folder's access list applies
+#endif
 
     Client client(socketPath);
     CHECK(client.connected());
@@ -112,7 +167,7 @@ void answersPingAndAppliesPolicy(const std::string& socketPath) {
     CHECK(json::parse(client.readLine())["event"] == "ack");  // connection survives bad input
 
     server.stop();
-    CHECK(!std::filesystem::exists(socketPath));  // cleaned up
+    CHECK(!pathExists(socketPath));  // cleaned up
 }
 
 void servesSeveralClientsAtOnce(const std::string& socketPath) {
@@ -160,13 +215,11 @@ void refusesToStartWhenAnotherServerIsListening(const std::string& socketPath) {
 
 void replacesLeftoverSocketFromACrashedRun(const std::string& socketPath) {
     // Bind without listening, then close: leaves a socket file that nobody serves.
-    int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
+    Socket fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    sockaddr_un addr = addressOf(socketPath);
     CHECK(::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) == 0);
-    ::close(fd);
-    CHECK(std::filesystem::exists(socketPath));
+    closeSocket(fd);
+    CHECK(pathExists(socketPath));
 
     MessageHandler handler(nullptr);
     IpcServer server(socketPath, handler);
@@ -185,6 +238,13 @@ void rejectsOverlongPaths() {
 }  // namespace
 
 int main() {
+#ifdef _WIN32
+    WSADATA wsa;  // the test's own client sockets need Winsock started too
+    if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        std::cerr << "WSAStartup failed\n";
+        return 1;
+    }
+#endif
     std::string dir = makeTempDir();
     if (dir.empty()) {
         std::cerr << "could not create temp dir\n";
@@ -198,7 +258,8 @@ int main() {
     replacesLeftoverSocketFromACrashedRun(dir + "/e.sock");
     rejectsOverlongPaths();
 
-    std::filesystem::remove_all(dir);
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
     if (failures == 0) std::cout << "ipc server tests passed\n";
     return failures == 0 ? 0 : 1;
 }
