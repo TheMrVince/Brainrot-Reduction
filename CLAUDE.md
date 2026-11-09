@@ -52,7 +52,7 @@ controller/ (Java 21, Gradle)                  enforcer/ (C++20, CMake)
 ## Build and test
 
 ```bash
-./gradlew :controller:test                                   # gradlew.bat on Windows; 108 tests
+./gradlew :controller:test                                   # gradlew.bat on Windows; 111 tests
 cmake -S enforcer -B enforcer/build -DCMAKE_BUILD_TYPE=Release
 cmake --build enforcer/build --config Release --parallel
 ctest --test-dir enforcer/build --build-config Release --output-on-failure   # 5 suites; 6 on Windows
