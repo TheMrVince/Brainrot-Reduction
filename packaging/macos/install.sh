@@ -58,7 +58,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-[ "$(uname)" = "Darwin" ] || die "this script is for macOS (Windows comes with phase C6)"
+[ "$(uname)" = "Darwin" ] || die "this script is for macOS (on Windows use packaging/windows/install.ps1)"
 case "$CONTROLLER_MODE" in tray|run|none) ;; *) die "--controller must be tray, run or none" ;; esac
 
 DOMAIN="gui/$(id -u)"

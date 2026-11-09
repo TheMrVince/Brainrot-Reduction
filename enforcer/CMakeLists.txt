@@ -34,8 +34,11 @@ add_library(enforcer_core STATIC
 target_include_directories(enforcer_core PUBLIC include)
 target_link_libraries(enforcer_core PRIVATE nlohmann_json::nlohmann_json)
 
-# The local-socket transport: POSIX today, a Windows one comes with C6.
-if(UNIX)
+# The local-socket transport: an AF_UNIX socket on every OS, through Winsock on Windows.
+if(WIN32)
+    add_library(enforcer_ipc STATIC src/ipc_server_windows.cpp)
+    target_link_libraries(enforcer_ipc PUBLIC enforcer_core ws2_32)
+else()
     add_library(enforcer_ipc STATIC src/ipc_server_posix.cpp)
     target_link_libraries(enforcer_ipc PUBLIC enforcer_core)
 endif()
@@ -46,6 +49,17 @@ if(APPLE AND NOT BRAINROT_CORE_ONLY)
     add_executable(enforcer src/main.cpp src/platform_macos.mm)
     set_source_files_properties(src/platform_macos.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     target_link_libraries(enforcer PRIVATE enforcer_ipc "-framework AppKit" "-framework Foundation")
+elseif(WIN32 AND NOT BRAINROT_CORE_ONLY)
+    # A library so the adapter test can link it without main.cpp.
+    add_library(enforcer_platform STATIC src/platform_windows.cpp)
+    target_link_libraries(enforcer_platform PUBLIC enforcer_core user32 shell32)
+    add_executable(enforcer src/main.cpp)
+    target_link_libraries(enforcer PRIVATE enforcer_platform enforcer_ipc)
+    # The same program without a console window, for starting at login (like javaw.exe beside java.exe).
+    # It keeps main() as its entry point; its output goes to `serve --log-file`.
+    add_executable(enforcerw WIN32 src/main.cpp)
+    target_link_libraries(enforcerw PRIVATE enforcer_platform enforcer_ipc)
+    target_link_options(enforcerw PRIVATE /ENTRY:mainCRTStartup)
 else()
     message(STATUS "Building the portable core and its tests only (no platform adapter for ${CMAKE_SYSTEM_NAME} yet)")
 endif()
@@ -68,8 +82,13 @@ add_executable(enforcer_test tests/enforcer_test.cpp)
 target_link_libraries(enforcer_test PRIVATE enforcer_core)
 add_test(NAME enforcer COMMAND enforcer_test)
 
-if(UNIX)
-    add_executable(ipc_server_test tests/ipc_server_test.cpp)
-    target_link_libraries(ipc_server_test PRIVATE enforcer_ipc nlohmann_json::nlohmann_json)
-    add_test(NAME ipc_server COMMAND ipc_server_test)
+add_executable(ipc_server_test tests/ipc_server_test.cpp)
+target_link_libraries(ipc_server_test PRIVATE enforcer_ipc nlohmann_json::nlohmann_json)
+add_test(NAME ipc_server COMMAND ipc_server_test)
+
+# Exercises the real Windows adapter against child processes it starts itself.
+if(TARGET enforcer_platform)
+    add_executable(platform_windows_test tests/platform_windows_test.cpp)
+    target_link_libraries(platform_windows_test PRIVATE enforcer_platform)
+    add_test(NAME platform_windows COMMAND platform_windows_test)
 endif()

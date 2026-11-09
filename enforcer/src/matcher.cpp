@@ -31,6 +31,23 @@ constexpr std::array kProtectedPathPrefixes = {
     "/sbin/",
 };
 
+// Windows: matched right after the drive letter ("c:"), so any system drive works.
+// \windows\ covers explorer, taskmgr, cmd, Windows PowerShell, conhost and the rest of the OS.
+constexpr std::array kProtectedWindowsPrefixes = {
+    "\\windows\\",
+    "\\program files\\powershell\\",  // PowerShell 7
+};
+
+// Windows apps without bundle IDs whose install path contains the user name, so a prefix cannot work.
+constexpr std::array kProtectedPathFragments = {
+    "\\microsoft vs code\\",
+    "\\windowsapps\\microsoft.windowsterminal",  // also the Preview build
+    "\\jetbrains\\",
+    "\\windowsapps\\claude_",                    // Claude desktop (Store install)
+    "\\anthropicclaude\\",                       // Claude desktop (classic installer)
+    "\\claude-data\\",                           // Claude Code started by the desktop app
+};
+
 // Our own Java controller is a plain `java` process, so recognise it by its main class.
 constexpr std::array kProtectedCmdlineMarkers = {
     "com.brainrot.controller",
@@ -47,6 +64,11 @@ bool startsWith(const std::string& s, const std::string& prefix) {
 
 bool contains(const std::string& s, const std::string& part) {
     return s.find(part) != std::string::npos;
+}
+
+// "c:\windows\x.exe" starts with "\windows\" after its drive letter.
+bool startsWithAfterDrive(const std::string& path, const std::string& prefix) {
+    return path.size() > 2 && path[1] == ':' && path.compare(2, prefix.size(), prefix) == 0;
 }
 
 // "com.google.Chrome" covers "com.google.Chrome" and "com.google.Chrome.helper", not "com.google.ChromeX".
@@ -96,6 +118,12 @@ bool Matcher::isProtected(const ProcessInfo& process) const {
     const std::string path = lower(process.path);
     for (const char* prefix : kProtectedPathPrefixes) {
         if (startsWith(path, prefix)) return true;
+    }
+    for (const char* prefix : kProtectedWindowsPrefixes) {
+        if (startsWithAfterDrive(path, prefix)) return true;
+    }
+    for (const char* fragment : kProtectedPathFragments) {
+        if (contains(path, fragment)) return true;
     }
 
     const std::string cmdline = lower(process.cmdline);

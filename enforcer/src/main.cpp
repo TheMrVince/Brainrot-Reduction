@@ -1,6 +1,9 @@
+#include <cctype>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -32,7 +35,7 @@ void usage() {
     std::cerr << "Usage:\n"
                  "  enforcer list [--all]\n"
                  "  enforcer watch\n"
-                 "  enforcer serve [--socket PATH] [--policy-file PATH]\n"
+                 "  enforcer serve [--socket PATH] [--policy-file PATH] [--log-file PATH]\n"
                  "  enforcer scan  <rule>\n"
                  "  enforcer close <rule> [--dry-run] [--grace-ms N]\n"
                  "\n"
@@ -81,6 +84,23 @@ Options parseOptions(const std::vector<std::string>& args) {
     return opts;
 }
 
+#ifdef _WIN32
+// Windows has no bundle IDs, so "apps" are the processes that do not live in the Windows folder,
+// and the path is shown instead: it is what a pathPrefix rule would match.
+bool looksLikeAnApp(const ProcessInfo& p) {
+    std::string path = p.path;
+    for (char& c : path) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return path.rfind("c:\\windows\\", 0) != 0;
+}
+
+int list(brainrot::PlatformAdapter& adapter, bool all) {
+    for (const auto& p : adapter.listProcesses()) {
+        if (!all && !looksLikeAnApp(p)) continue;
+        std::cout << p.pid << "\t" << p.name << "\t" << p.path << "\n";
+    }
+    return 0;
+}
+#else
 int list(brainrot::PlatformAdapter& adapter, bool all) {
     for (const auto& p : adapter.listProcesses()) {
         if (!all && p.identifier.empty()) continue;
@@ -88,6 +108,7 @@ int list(brainrot::PlatformAdapter& adapter, bool all) {
     }
     return 0;
 }
+#endif
 
 // scan and close share this: both only ever act on what the matcher says to block.
 int apply(brainrot::PlatformAdapter& adapter, const Options& opts, bool act) {
@@ -117,24 +138,57 @@ int apply(brainrot::PlatformAdapter& adapter, const Options& opts, bool act) {
     return failures == 0 ? 0 : 1;
 }
 
-std::string defaultDataDir() {
+// MSVC deprecates freopen in favour of freopen_s, but freopen_s opens the file without sharing, so
+// the second stream (stderr after stdout) could not open the same log file.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+bool appendOutputTo(const std::string& path, std::FILE* stream) {
+    return std::freopen(path.c_str(), "a", stream) != nullptr;
+}
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
+// The same folder the Java controller uses: its user.home is HOME on macOS and USERPROFILE on Windows.
+std::filesystem::path defaultDataDir() {
+#ifdef _WIN32
+    const char* home = std::getenv("USERPROFILE");
+    if (!home) home = std::getenv("HOME");
+    return std::filesystem::path(home ? home : "C:\\") / ".brainrot-reduction";
+#else
     const char* home = std::getenv("HOME");
-    return std::string(home ? home : "/tmp") + "/.brainrot-reduction";
+    return std::filesystem::path(home ? home : "/tmp") / ".brainrot-reduction";
+#endif
 }
 
 // The daemon: receives policies over IPC and enforces them.
 int serve(const std::vector<std::string>& args, brainrot::PlatformAdapter& adapter) {
-    std::string socketPath = defaultDataDir() + "/enforcer.sock";
-    std::string policyFile = defaultDataDir() + "/policy.json";
+    std::string socketPath = (defaultDataDir() / "enforcer.sock").string();
+    std::string policyFile = (defaultDataDir() / "policy.json").string();
+    std::string logFile;
     for (size_t i = 1; i < args.size(); ++i) {
         if (args[i] == "--socket" && i + 1 < args.size()) {
             socketPath = args[++i];
         } else if (args[i] == "--policy-file" && i + 1 < args.size()) {
             policyFile = args[++i];
+        } else if (args[i] == "--log-file" && i + 1 < args.size()) {
+            logFile = args[++i];
         } else {
             std::cerr << "Unknown or incomplete option: " << args[i] << "\n";
             usage();
             return 2;
+        }
+    }
+
+    // For a start at login on Windows, where no launcher captures the output the way launchd does,
+    // and enforcerw.exe has no console at all.
+    if (!logFile.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(logFile).parent_path(), ec);
+        if (!appendOutputTo(logFile, stdout) || !appendOutputTo(logFile, stderr)) {
+            return 1;  // nowhere left to report it
         }
     }
 

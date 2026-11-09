@@ -72,27 +72,26 @@ std::string IpcServer::start() {
         ::unlink(path_.c_str());  // leftover from a crashed run
     }
 
-    listenFd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (listenFd_ < 0) return std::string("socket: ") + std::strerror(errno);
+    int listener = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (listener < 0) return std::string("socket: ") + std::strerror(errno);
 
     // Only the current user may connect.
     mode_t oldMask = ::umask(0177);
-    int rc = ::bind(listenFd_, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
+    int rc = ::bind(listener, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
     int bindError = errno;
     ::umask(oldMask);
     if (rc != 0) {
-        ::close(listenFd_);
-        listenFd_ = -1;
+        ::close(listener);
         return std::string("bind: ") + std::strerror(bindError);
     }
-    if (::listen(listenFd_, 8) != 0) {
+    if (::listen(listener, 8) != 0) {
         std::string message = std::string("listen: ") + std::strerror(errno);
-        ::close(listenFd_);
-        listenFd_ = -1;
+        ::close(listener);
         ::unlink(path_.c_str());
         return message;
     }
 
+    listenFd_ = listener;
     stopping_ = false;
     acceptThread_ = std::thread([this] { acceptLoop(); });
     return {};
@@ -105,17 +104,18 @@ void IpcServer::stop() {
     if (acceptThread_.joinable()) acceptThread_.join();
     while (activeConnections_ > 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-    ::close(listenFd_);
+    ::close(static_cast<int>(listenFd_));
     listenFd_ = -1;
     ::unlink(path_.c_str());
 }
 
 void IpcServer::acceptLoop() {
+    int listener = static_cast<int>(listenFd_);
     while (!stopping_) {
-        pollfd pfd{listenFd_, POLLIN, 0};
+        pollfd pfd{listener, POLLIN, 0};
         if (::poll(&pfd, 1, kPollMs) <= 0) continue;
 
-        int client = ::accept(listenFd_, nullptr, nullptr);
+        int client = ::accept(listener, nullptr, nullptr);
         if (client < 0) continue;
 
         ++activeConnections_;
@@ -127,7 +127,8 @@ void IpcServer::acceptLoop() {
     }
 }
 
-void IpcServer::serveConnection(int fd) {
+void IpcServer::serveConnection(std::intptr_t handle) {
+    int fd = static_cast<int>(handle);
     std::string pending;
     char buffer[4096];
 
