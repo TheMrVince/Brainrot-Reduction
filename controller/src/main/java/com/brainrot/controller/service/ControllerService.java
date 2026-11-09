@@ -14,6 +14,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -56,6 +58,10 @@ public final class ControllerService implements AutoCloseable {
     private Policy lastDelivered;       // null after a failed delivery, so the next tick retries
     private Instant lastDeliveredAt;
     private boolean deliveryFailing;
+    private Boolean enforcerReachable;  // null until the first delivery attempt
+    private Instant lastCheckAt;        // last time LeetCode answered
+    private StatusSnapshot lastPublished;
+    private final List<Consumer<StatusSnapshot>> listeners = new CopyOnWriteArrayList<>();
     private ScheduledExecutorService executor;
 
     public ControllerService(Config config, State initialState, StateStore store, LeetCodeChecker checker,
@@ -98,6 +104,23 @@ public final class ControllerService implements AutoCloseable {
         }
     }
 
+    /**
+     * Called, on the service's own thread, whenever the status changes. Keep it quick: hand work to
+     * another thread. Also called once on registration if a status already exists.
+     */
+    public void addStatusListener(Consumer<StatusSnapshot> listener) {
+        listeners.add(listener);
+        StatusSnapshot current;
+        synchronized (this) {
+            current = lastPublished;
+        }
+        if (current != null) listener.accept(current);
+    }
+
+    public synchronized StatusSnapshot snapshot() {
+        return snapshotAt(clock.instant());
+    }
+
     /** Asks LeetCode again as soon as possible instead of waiting for the poll interval. */
     public synchronized void requestCheck() {
         checkRequested = true;
@@ -112,6 +135,7 @@ public final class ControllerService implements AutoCloseable {
             persist();
             log.accept("emergency unlock granted until " + display.format(granted.until()));
             deliver(engine.decide(state, now), now, true);
+            publishIfChanged(now);
         }
         return result;
     }
@@ -128,6 +152,29 @@ public final class ControllerService implements AutoCloseable {
         Instant now = clock.instant();
         if (shouldCheck(now)) check(now);
         deliver(engine.decide(state, now), now, false);
+        publishIfChanged(now);
+    }
+
+    private StatusSnapshot snapshotAt(Instant now) {
+        Policy policy = engine.decide(state, now);
+        StatusSnapshot.Reason reason = !policy.isUnlockedAt(now) ? StatusSnapshot.Reason.LOCKED
+                : engine.solvedToday(state, now) ? StatusSnapshot.Reason.SOLVED_TODAY
+                : StatusSnapshot.Reason.EMERGENCY_UNLOCK;
+        return new StatusSnapshot(reason, policy.isUnlockedAt(now) ? policy.unlockedUntil() : null,
+                leetCodeReachable, enforcerReachable, lastCheckAt, config.dryRun());
+    }
+
+    private void publishIfChanged(Instant now) {
+        StatusSnapshot snapshot = snapshotAt(now);
+        if (snapshot.equals(lastPublished)) return;
+        lastPublished = snapshot;
+        for (Consumer<StatusSnapshot> listener : listeners) {
+            try {
+                listener.accept(snapshot);
+            } catch (RuntimeException e) {
+                log.accept("a status listener failed: " + e);
+            }
+        }
     }
 
     private boolean shouldCheck(Instant now) {
@@ -149,6 +196,7 @@ public final class ControllerService implements AutoCloseable {
         }
         if (Boolean.FALSE.equals(leetCodeReachable)) log.accept("LeetCode reachable again");
         leetCodeReachable = true;
+        lastCheckAt = now;
 
         State updated = engine.observe(state, result);
         if (!updated.equals(state)) {
@@ -168,12 +216,14 @@ public final class ControllerService implements AutoCloseable {
         } catch (IOException e) {
             if (!deliveryFailing) log.accept("could not deliver the policy: " + e.getMessage() + "; will keep retrying");
             deliveryFailing = true;
+            enforcerReachable = false;
             lastDelivered = null;
             return;
         }
 
         if (deliveryFailing) log.accept("the enforcer is reachable again");
         deliveryFailing = false;
+        enforcerReachable = true;
         if (changed) log.accept("policy delivered: " + describe(policy, now));
         lastDelivered = policy;
         lastDeliveredAt = now;

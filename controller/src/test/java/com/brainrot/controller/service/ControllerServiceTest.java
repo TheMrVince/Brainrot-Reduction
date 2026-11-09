@@ -354,4 +354,120 @@ class ControllerServiceTest {
         Thread.sleep(150);
         assertEquals(attemptsAtStop, enforcer.attempts.get(), "no ticks after close");
     }
+
+    // --- the status feed for the UI -------------------------------------------------------
+
+    private List<StatusSnapshot> listen(ControllerService service) {
+        List<StatusSnapshot> seen = new CopyOnWriteArrayList<>();
+        service.addStatusListener(seen::add);
+        return seen;
+    }
+
+    @Test
+    void theFirstStatusDescribesALockedStateWithBothConnectionsKnown() {
+        ControllerService service = service();
+        List<StatusSnapshot> seen = listen(service);
+
+        service.tick();
+
+        assertEquals(1, seen.size());
+        StatusSnapshot status = seen.get(0);
+        assertEquals(StatusSnapshot.Reason.LOCKED, status.reason());
+        assertNull(status.unlockedUntil());
+        assertEquals(Boolean.TRUE, status.leetCodeReachable());
+        assertEquals(Boolean.TRUE, status.enforcerReachable());
+        assertEquals(clock.instant(), status.lastCheckAt());
+        assertEquals(false, status.dryRun());
+    }
+
+    @Test
+    void listenersHearOnlyAboutChangesNotEveryTick() {
+        ControllerService service = service();
+        List<StatusSnapshot> seen = listen(service);
+
+        service.tick();
+        for (int i = 0; i < 5; i++) tickAfter(service, Duration.ofSeconds(10));
+
+        assertEquals(1, seen.size());
+    }
+
+    @Test
+    void solvingPublishesAnUnlockWithItsEndTime() {
+        ControllerService service = service();
+        List<StatusSnapshot> seen = listen(service);
+        service.tick();
+
+        leetCode.answer = new CheckResult.Reached(Optional.of(at(11, 10, 10, 2)));
+        clock.set(at(11, 10, 10, 5));
+        service.tick();
+
+        StatusSnapshot status = seen.get(seen.size() - 1);
+        assertEquals(StatusSnapshot.Reason.SOLVED_TODAY, status.reason());
+        assertEquals(at(11, 11, 4, 0), status.unlockedUntil());
+        assertTrue(status.unlocked());
+    }
+
+    @Test
+    void anEmergencyUnlockIsPublishedAsSuch() {
+        ControllerService service = service();
+        List<StatusSnapshot> seen = listen(service);
+        service.tick();
+
+        service.requestEmergencyUnlock(PHRASE);
+
+        StatusSnapshot status = seen.get(seen.size() - 1);
+        assertEquals(StatusSnapshot.Reason.EMERGENCY_UNLOCK, status.reason());
+        assertEquals(clock.instant().plus(Duration.ofMinutes(60)), status.unlockedUntil());
+    }
+
+    @Test
+    void theEnforcerBeingDownAndBackIsPublished() {
+        ControllerService service = service();
+        List<StatusSnapshot> seen = listen(service);
+        service.tick();
+
+        enforcer.down = true;
+        tickAfter(service, Duration.ofSeconds(60));  // the heartbeat finds it gone
+        assertEquals(Boolean.FALSE, seen.get(seen.size() - 1).enforcerReachable());
+
+        enforcer.down = false;
+        tickAfter(service, Duration.ofSeconds(10));
+        assertEquals(Boolean.TRUE, seen.get(seen.size() - 1).enforcerReachable());
+    }
+
+    @Test
+    void anUnreachableLeetCodeIsPublished() {
+        leetCode.answer = new CheckResult.Unreachable("no network");
+        ControllerService service = service();
+        List<StatusSnapshot> seen = listen(service);
+
+        service.tick();
+
+        assertEquals(Boolean.FALSE, seen.get(0).leetCodeReachable());
+        assertNull(seen.get(0).lastCheckAt(), "it has never been answered");
+    }
+
+    @Test
+    void aListenerThatJoinsLateGetsTheCurrentStatusAtOnce() {
+        ControllerService service = service();
+        service.tick();
+
+        List<StatusSnapshot> late = listen(service);
+
+        assertEquals(1, late.size());
+        assertEquals(service.snapshot().reason(), late.get(0).reason());
+    }
+
+    @Test
+    void aBrokenListenerHarmsNeitherTheServiceNorTheOtherListeners() {
+        ControllerService service = service();
+        service.addStatusListener(status -> { throw new IllegalStateException("bad listener"); });
+        List<StatusSnapshot> healthy = listen(service);
+
+        service.tick();
+
+        assertEquals(1, healthy.size());
+        assertEquals(1, logged("a status listener failed"));
+        assertEquals(1, enforcer.delivered.size());
+    }
 }
