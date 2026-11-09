@@ -20,6 +20,9 @@ public final class LeetCodeClient {
     private static final String QUERY = "query recentAcSubmissions($username: String!, $limit: Int!) "
             + "{ recentAcSubmissionList(username: $username, limit: $limit) { title titleSlug timestamp } }";
 
+    private static final String USER_QUERY = "query userExists($username: String!) "
+            + "{ matchedUser(username: $username) { username } }";
+
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final HttpClient http = HttpClient.newBuilder()
@@ -29,9 +32,19 @@ public final class LeetCodeClient {
     /** Newest first. Throws IOException on network failure, a bad response, or an unknown user. */
     public List<AcceptedSubmission> fetchRecentAccepted(String username, int limit)
             throws IOException, InterruptedException {
-        String body = JSON.writeValueAsString(Map.of(
-                "query", QUERY,
-                "variables", Map.of("username", username, "limit", limit)));
+        return parse(post(QUERY, Map.of("username", username, "limit", limit)));
+    }
+
+    /**
+     * Whether the account exists. LeetCode answers an unknown user with an empty submission list,
+     * which looks exactly like "has solved nothing", so a typo needs its own check.
+     */
+    public boolean userExists(String username) throws IOException, InterruptedException {
+        return parseUserExists(post(USER_QUERY, Map.of("username", username)));
+    }
+
+    private String post(String query, Map<String, Object> variables) throws IOException, InterruptedException {
+        String body = JSON.writeValueAsString(Map.of("query", query, "variables", variables));
 
         HttpRequest request = HttpRequest.newBuilder(ENDPOINT)
                 .timeout(Duration.ofSeconds(15))
@@ -44,7 +57,13 @@ public final class LeetCodeClient {
         if (response.statusCode() != 200) {
             throw new IOException("LeetCode returned HTTP " + response.statusCode());
         }
-        return parse(response.body());
+        return response.body();
+    }
+
+    static boolean parseUserExists(String json) throws IOException {
+        JsonNode data = JSON.readTree(json).path("data");
+        if (!data.has("matchedUser")) throw new IOException("Unexpected LeetCode response");
+        return !data.get("matchedUser").isNull();
     }
 
     static List<AcceptedSubmission> parse(String json) throws IOException {

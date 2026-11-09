@@ -19,6 +19,9 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) throws InterruptedException {
+        if (args.length >= 1 && args[0].equals("run")) {
+            System.exit(RunCommand.run(List.of(args).subList(1, args.length)));
+        }
         if (args.length >= 1 && args[0].equals("status")) {
             System.exit(StatusCommand.status(List.of(args).subList(1, args.length)));
         }
@@ -27,6 +30,7 @@ public final class Main {
         }
         if (args.length != 1) {
             System.err.println("Usage:\n"
+                    + "  run    [--config FILE] [--state FILE] [--socket FILE]   (keeps running)\n"
                     + "  status [--send] [--config FILE] [--state FILE] [--socket FILE]\n"
                     + "  unlock [--send] [--config FILE] [--state FILE] [--socket FILE] <phrase>\n"
                     + "  <leetcode-username>   (just check one user, no config needed)");

@@ -40,4 +40,21 @@ class LeetCodeClientTest {
     void nullListBecomesIOException() {
         assertThrows(IOException.class, () -> LeetCodeClient.parse("{\"data\":{\"recentAcSubmissionList\":null}}"));
     }
+
+    @Test
+    void anExistingUserIsRecognised() throws IOException {
+        assertTrue(LeetCodeClient.parseUserExists("{\"data\":{\"matchedUser\":{\"username\":\"TheMrVince\"}}}"));
+    }
+
+    @Test
+    void aMissingUserIsNotMistakenForAnError() throws IOException {
+        String json = "{\"errors\":[{\"message\":\"That user does not exist.\"}],\"data\":{\"matchedUser\":null}}";
+        assertEquals(false, LeetCodeClient.parseUserExists(json));
+    }
+
+    @Test
+    void aResponseWithoutAnAnswerIsAnError() {
+        assertThrows(IOException.class, () -> LeetCodeClient.parseUserExists("{\"data\":{}}"));
+        assertThrows(IOException.class, () -> LeetCodeClient.parseUserExists("{}"));
+    }
 }
