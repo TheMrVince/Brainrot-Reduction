@@ -11,6 +11,7 @@ import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import java.awt.AWTException;
 import java.awt.Image;
+import java.awt.Menu;
 import java.awt.MenuItem;
 import java.awt.PopupMenu;
 import java.awt.SystemTray;
@@ -87,6 +88,7 @@ public final class TrayApp {
 
         menu.add(disabled(headline));
         for (String line : details) menu.add(disabled(line));
+        menu.add(blockedAppsMenu());
         menu.addSeparator();
 
         MenuItem check = new MenuItem("Check now");
@@ -101,6 +103,15 @@ public final class TrayApp {
         MenuItem quit = new MenuItem("Quit");
         quit.addActionListener(event -> onQuit.run());
         menu.add(quit);
+    }
+
+    /** A submenu listing what the config blocks; the entries are information, not buttons. */
+    private Menu blockedAppsMenu() {
+        Menu menu = new Menu("Blocked applications");
+        java.util.List<String> apps = presenter.blockedApps(config.blockedApps());
+        if (apps.isEmpty()) menu.add(disabled("(none)"));
+        for (String app : apps) menu.add(disabled(app));
+        return menu;
     }
 
     private static MenuItem disabled(String text) {

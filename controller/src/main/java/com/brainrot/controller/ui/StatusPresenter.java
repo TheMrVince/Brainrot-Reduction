@@ -1,5 +1,6 @@
 package com.brainrot.controller.ui;
 
+import com.brainrot.controller.policy.AppRule;
 import com.brainrot.controller.policy.EmergencyUnlockResult;
 import com.brainrot.controller.service.StatusSnapshot;
 
@@ -8,6 +9,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 
@@ -32,6 +34,25 @@ public final class StatusPresenter {
 
     public StatusPresenter(ZoneId zone) {
         this.zone = zone;
+    }
+
+    /**
+     * The names for the "Blocked applications" menu, in config order. One app is often several rules
+     * sharing a label (a game's launcher, client and game), so each label appears once. A rule without a
+     * label is shown by whatever it matches on.
+     */
+    public List<String> blockedApps(List<AppRule> rules) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        for (AppRule rule : rules) names.add(displayName(rule));
+        return List.copyOf(names);
+    }
+
+    private static String displayName(AppRule rule) {
+        if (!rule.label().isBlank()) return rule.label();
+        if (!rule.processName().isEmpty()) return rule.processName();
+        if (!rule.bundleId().isEmpty()) return rule.bundleId();
+        if (!rule.pathPrefix().isEmpty()) return rule.pathPrefix();
+        return String.join(" ", rule.cmdlineContains());
     }
 
     /** {@code previous} is what was shown before, or null the first time; it decides whether to notify. */

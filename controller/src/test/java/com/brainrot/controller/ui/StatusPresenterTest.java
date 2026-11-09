@@ -1,5 +1,6 @@
 package com.brainrot.controller.ui;
 
+import com.brainrot.controller.policy.AppRule;
 import com.brainrot.controller.policy.EmergencyUnlockResult;
 import com.brainrot.controller.service.StatusSnapshot;
 import com.brainrot.controller.service.StatusSnapshot.Reason;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -171,5 +173,40 @@ class StatusPresenterTest {
                 presenter.describe(new EmergencyUnlockResult.NoneLeft(Optional.of(at(11, 17, 20, 0))), NOW));
         assertEquals("Emergency unlocks are switched off in the config.",
                 presenter.describe(new EmergencyUnlockResult.NoneLeft(Optional.empty()), NOW));
+    }
+
+    // --- the "Blocked applications" menu -------------------------------------------------
+
+    private static AppRule byName(String label, String processName) {
+        return new AppRule(label, "", processName, "", List.of());
+    }
+
+    @Test
+    void blockedAppsListsEachLabelOnceInConfigOrder() {
+        List<AppRule> rules = List.of(
+                byName("Valorant", "VALORANT.exe"),
+                byName("Valorant", "VALORANT-Win64-Shipping.exe"),
+                byName("League of Legends", "LeagueClient.exe"),
+                byName("Final Fantasy XIV", "ffxiv_dx11.exe"),
+                byName("League of Legends", "League of Legends.exe"));
+
+        assertEquals(List.of("Valorant", "League of Legends", "Final Fantasy XIV"), presenter.blockedApps(rules));
+    }
+
+    @Test
+    void anUnlabelledRuleIsShownByWhatItMatches() {
+        List<AppRule> rules = List.of(
+                byName("", "steam.exe"),
+                new AppRule(" ", "com.hnc.Discord", "", "", List.of()),
+                new AppRule("", "", "", "C:\\Games\\Odd\\", List.of()),
+                new AppRule("", "", "", "", List.of("com.example.game", "--username")));
+
+        assertEquals(List.of("steam.exe", "com.hnc.Discord", "C:\\Games\\Odd\\", "com.example.game --username"),
+                presenter.blockedApps(rules));
+    }
+
+    @Test
+    void noRulesMeansAnEmptyList() {
+        assertTrue(presenter.blockedApps(List.of()).isEmpty());
     }
 }
