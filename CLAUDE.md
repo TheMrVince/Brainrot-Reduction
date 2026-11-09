@@ -100,7 +100,8 @@ Done on macOS: J1 to J7 (controller), C1 to C5 (enforcer), P1 (CI), P2 (launchd 
    - Checked end to end on Windows with `enforcer serve` and the Java client: warning, close after 59 s, relaunch
      closed in 1 s. The installed tasks were tested on the user's machine (dry run, blocking Discord): the controller
      sent a locked policy, the enforcer logged "would close" for Discord, and a killed enforcer came back after 48 s.
-     Not yet seen: a real logon after install.
+     After a real sign-out and sign-in, both tasks started at logon, the enforcer loaded the saved policy, and the
+     tray icon appeared. (A task's "last run" time updates every minute even when the repeat does nothing.)
 
 Then P3: `jpackage` installers (a `.msi` on Windows, a `.dmg` on macOS) so a machine needs no JDK or CMake.
 
