@@ -66,8 +66,9 @@ void Enforcer::stop() {
 void Enforcer::setPolicy(Policy policy) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        // The controller re-sends the same policy every minute; that must not repeat the dry-run log.
+        if (!policy_ || !(*policy_ == policy)) dryRunLogged_.clear();
         policy_ = std::move(policy);
-        dryRunLogged_.clear();
         refreshEnforcingLocked(now_());
     }
     requestScan();

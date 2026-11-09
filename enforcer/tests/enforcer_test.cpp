@@ -239,6 +239,24 @@ void dryRunOnlyLogsAndLogsEachProcessOnce() {
     CHECK(r.logged("[dry run] would close Discord (pid 100)"));
 }
 
+void resendingTheSamePolicyDoesNotRepeatTheDryRunLog() {
+    Rig r;
+    addDiscord(r.os);
+    r.enforcer.setPolicy(discordPolicy(10, true));
+    r.enforcer.scanOnce();
+    size_t afterFirst = r.logs.size();
+
+    for (int i = 0; i < 3; ++i) {  // the controller's heartbeat
+        r.enforcer.setPolicy(discordPolicy(10, true));
+        r.enforcer.scanOnce();
+    }
+    CHECK(r.logs.size() == afterFirst);
+
+    r.enforcer.setPolicy(discordPolicy(5, true));  // a real change reports again
+    r.enforcer.scanOnce();
+    CHECK(r.logs.size() == afterFirst * 2);
+}
+
 // --- the warning ----------------------------------------------------------------------
 
 void appsRunningWhenTheLockStartsAreWarnedThenClosed() {
@@ -418,6 +436,7 @@ int main() {
     doesNothingWhileUnlockedOrWithoutAPolicy();
     emergencyUnlockSuspendsEnforcementUntilItExpires();
     dryRunOnlyLogsAndLogsEachProcessOnce();
+    resendingTheSamePolicyDoesNotRepeatTheDryRunLog();
     appsRunningWhenTheLockStartsAreWarnedThenClosed();
     resendingThePolicyDoesNotRestartTheCountdown();
     appsLaunchedWhileLockedCloseImmediately();

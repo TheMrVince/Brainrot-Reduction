@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -150,7 +151,17 @@ int serve(const std::vector<std::string>& args, brainrot::PlatformAdapter& adapt
 
     brainrot::PolicyStore store(policyFile);
 
+    // The controller re-sends its policy every minute as a heartbeat. Only a change is worth a log
+    // line, a disk write or a rescan.
+    std::optional<brainrot::Policy> current;  // guarded by outputMutex
+
     brainrot::MessageHandler handler([&](const brainrot::Policy& policy) {
+        {
+            std::lock_guard<std::mutex> lock(outputMutex);
+            if (current && *current == policy) return;
+            current = policy;
+        }
+
         std::ostringstream line;
         line << "policy: " << (policy.locked ? "locked" : "unlocked")
              << ", dryRun=" << (policy.dryRun ? "yes" : "no")
@@ -182,6 +193,10 @@ int serve(const std::vector<std::string>& args, brainrot::PlatformAdapter& adapt
     if (std::optional<brainrot::Policy> saved = store.load(loadProblem)) {
         log(std::string("loaded saved policy: ") + (saved->locked ? "locked" : "unlocked") + ", " +
             std::to_string(saved->apps.size()) + " app rule(s)");
+        {
+            std::lock_guard<std::mutex> lock(outputMutex);
+            current = *saved;  // so an identical re-send is not mistaken for news
+        }
         enforcer.setPolicy(*saved);
     } else if (!loadProblem.empty()) {
         log("warning: ignoring saved policy: " + loadProblem);

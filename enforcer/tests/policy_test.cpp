@@ -63,6 +63,22 @@ void jsonRoundTrips() {
     CHECK(minimalBack && !minimalBack->unlockedUntil.has_value());
 }
 
+void policiesCompareByValue() {
+    CHECK(sample() == sample());
+
+    Policy different = sample();
+    different.apps[1].cmdlineContains.push_back("--extra");
+    CHECK(!(sample() == different));
+
+    Policy later = sample();
+    later.unlockedUntil = 7654321;
+    CHECK(!(sample() == later));
+
+    Policy relocked = sample();
+    relocked.unlockedUntil.reset();
+    CHECK(!(sample() == relocked));
+}
+
 void jsonRejectsBadInput() {
     std::string error;
     CHECK(!brainrot::parsePolicyJson("nope", error) && error == "invalid JSON");
@@ -145,6 +161,7 @@ int main() {
     }
 
     jsonRoundTrips();
+    policiesCompareByValue();
     jsonRejectsBadInput();
     storeSavesAndLoads(dir);
     storeOverwritesWithTheLatestPolicy(dir);

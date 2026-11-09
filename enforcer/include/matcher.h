@@ -19,6 +19,8 @@ struct AppRule {
     // Every entry must appear in the command line. Distinguishes e.g. one Java-based
     // game from every other java process.
     std::vector<std::string> cmdlineContains;
+
+    bool operator==(const AppRule&) const = default;
 };
 
 class Matcher {
