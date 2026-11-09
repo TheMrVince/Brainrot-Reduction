@@ -1,0 +1,21 @@
+# Java / Gradle
+.gradle/
+build/
+*.class
+
+# C++ / CMake
+enforcer/build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+
+# Local user config (copy config/config.example.json to create yours)
+config/config.json

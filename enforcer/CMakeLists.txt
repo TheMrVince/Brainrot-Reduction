@@ -1,0 +1,75 @@
+cmake_minimum_required(VERSION 3.20)
+project(brainrot_enforcer LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_OBJCXX_STANDARD 20)
+set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+
+# The portable core and its tests build everywhere. The enforcer program itself needs a platform
+# adapter, which exists for macOS only so far (Windows arrives in phase C6).
+option(BRAINROT_CORE_ONLY "Build only the portable core and its tests, even where an adapter exists" OFF)
+
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
+include(FetchContent)
+FetchContent_Declare(
+    json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+    URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(json)
+
+# Portable logic: no OS headers allowed in here.
+add_library(enforcer_core STATIC
+    src/matcher.cpp
+    src/policy_json.cpp
+    src/policy_store.cpp
+    src/message_handler.cpp
+    src/enforcer.cpp)
+target_include_directories(enforcer_core PUBLIC include)
+target_link_libraries(enforcer_core PRIVATE nlohmann_json::nlohmann_json)
+
+# The local-socket transport: POSIX today, a Windows one comes with C6.
+if(UNIX)
+    add_library(enforcer_ipc STATIC src/ipc_server_posix.cpp)
+    target_link_libraries(enforcer_ipc PUBLIC enforcer_core)
+endif()
+
+# One platform adapter per OS.
+if(APPLE AND NOT BRAINROT_CORE_ONLY)
+    enable_language(OBJCXX)
+    add_executable(enforcer src/main.cpp src/platform_macos.mm)
+    set_source_files_properties(src/platform_macos.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(enforcer PRIVATE enforcer_ipc "-framework AppKit" "-framework Foundation")
+else()
+    message(STATUS "Building the portable core and its tests only (no platform adapter for ${CMAKE_SYSTEM_NAME} yet)")
+endif()
+
+enable_testing()
+
+add_executable(matcher_test tests/matcher_test.cpp)
+target_link_libraries(matcher_test PRIVATE enforcer_core)
+add_test(NAME matcher COMMAND matcher_test)
+
+add_executable(message_handler_test tests/message_handler_test.cpp)
+target_link_libraries(message_handler_test PRIVATE enforcer_core nlohmann_json::nlohmann_json)
+add_test(NAME message_handler COMMAND message_handler_test)
+
+add_executable(policy_test tests/policy_test.cpp)
+target_link_libraries(policy_test PRIVATE enforcer_core)
+add_test(NAME policy COMMAND policy_test)
+
+add_executable(enforcer_test tests/enforcer_test.cpp)
+target_link_libraries(enforcer_test PRIVATE enforcer_core)
+add_test(NAME enforcer COMMAND enforcer_test)
+
+if(UNIX)
+    add_executable(ipc_server_test tests/ipc_server_test.cpp)
+    target_link_libraries(ipc_server_test PRIVATE enforcer_ipc nlohmann_json::nlohmann_json)
+    add_test(NAME ipc_server COMMAND ipc_server_test)
+endif()

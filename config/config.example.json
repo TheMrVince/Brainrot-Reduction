@@ -1,0 +1,15 @@
+{
+  "leetcodeUsername": "your-username-here",
+  "dayStartHour": 4,
+  "blockedApps": [
+    { "label": "Discord", "bundleId": "com.hnc.Discord" }
+  ],
+  "closeWarningMinutes": 10,
+  "pollIntervalSeconds": 300,
+  "emergencyUnlock": {
+    "perWeek": 1,
+    "durationMinutes": 60,
+    "confirmationPhrase": "I choose to waste my time"
+  },
+  "dryRun": true
+}
