@@ -31,7 +31,8 @@ class EnforcerClientTest {
     @BeforeEach
     void makeShortSocketPath() throws IOException {
         // Unix socket paths are limited to about 100 bytes, which JUnit's temp folders can exceed.
-        dir = Files.createTempDirectory(Path.of("/tmp"), "brt");
+        Path base = Files.isDirectory(Path.of("/tmp")) ? Path.of("/tmp") : Path.of(System.getProperty("java.io.tmpdir"));
+        dir = Files.createTempDirectory(base, "brt");
         socket = dir.resolve("e.sock");
     }
 

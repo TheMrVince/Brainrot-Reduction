@@ -7,6 +7,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_OBJCXX_STANDARD 20)
 set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 
+# The portable core and its tests build everywhere. The enforcer program itself needs a platform
+# adapter, which exists for macOS only so far (Windows arrives in phase C6).
+option(BRAINROT_CORE_ONLY "Build only the portable core and its tests, even where an adapter exists" OFF)
+
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
+
 include(FetchContent)
 FetchContent_Declare(
     json
@@ -26,24 +34,20 @@ add_library(enforcer_core STATIC
 target_include_directories(enforcer_core PUBLIC include)
 target_link_libraries(enforcer_core PRIVATE nlohmann_json::nlohmann_json)
 
-add_executable(enforcer src/main.cpp)
-
-# One IPC transport and one platform adapter per OS.
+# The local-socket transport: POSIX today, a Windows one comes with C6.
 if(UNIX)
     add_library(enforcer_ipc STATIC src/ipc_server_posix.cpp)
     target_link_libraries(enforcer_ipc PUBLIC enforcer_core)
-    target_link_libraries(enforcer PRIVATE enforcer_ipc)
-else()
-    message(FATAL_ERROR "No IPC transport for this OS yet (Windows arrives in phase C6)")
 endif()
 
-if(APPLE)
+# One platform adapter per OS.
+if(APPLE AND NOT BRAINROT_CORE_ONLY)
     enable_language(OBJCXX)
-    target_sources(enforcer PRIVATE src/platform_macos.mm)
+    add_executable(enforcer src/main.cpp src/platform_macos.mm)
     set_source_files_properties(src/platform_macos.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    target_link_libraries(enforcer PRIVATE "-framework AppKit" "-framework Foundation")
+    target_link_libraries(enforcer PRIVATE enforcer_ipc "-framework AppKit" "-framework Foundation")
 else()
-    message(FATAL_ERROR "No platform adapter for this OS yet (Windows arrives in phase C6)")
+    message(STATUS "Building the portable core and its tests only (no platform adapter for ${CMAKE_SYSTEM_NAME} yet)")
 endif()
 
 enable_testing()
@@ -64,6 +68,8 @@ add_executable(enforcer_test tests/enforcer_test.cpp)
 target_link_libraries(enforcer_test PRIVATE enforcer_core)
 add_test(NAME enforcer COMMAND enforcer_test)
 
-add_executable(ipc_server_test tests/ipc_server_test.cpp)
-target_link_libraries(ipc_server_test PRIVATE enforcer_ipc nlohmann_json::nlohmann_json)
-add_test(NAME ipc_server COMMAND ipc_server_test)
+if(UNIX)
+    add_executable(ipc_server_test tests/ipc_server_test.cpp)
+    target_link_libraries(ipc_server_test PRIVATE enforcer_ipc nlohmann_json::nlohmann_json)
+    add_test(NAME ipc_server COMMAND ipc_server_test)
+endif()

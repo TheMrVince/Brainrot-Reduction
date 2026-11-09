@@ -1,8 +1,7 @@
-#include <unistd.h>
-
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <random>
 
 #include "policy_json.h"
 #include "policy_store.h"
@@ -88,9 +87,13 @@ void jsonRejectsBadInput() {
 }
 
 std::string makeTempDir() {
-    std::string pattern = "/tmp/brainrot-test-XXXXXX";
-    char* dir = ::mkdtemp(pattern.data());
-    return dir ? dir : "";
+    std::random_device random;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        fs::path dir = fs::temp_directory_path() / ("brainrot-test-" + std::to_string(random()));
+        std::error_code ec;
+        if (fs::create_directory(dir, ec)) return dir.string();
+    }
+    return "";
 }
 
 void storeSavesAndLoads(const std::string& dir) {
@@ -102,8 +105,10 @@ void storeSavesAndLoads(const std::string& dir) {
     CHECK(loaded && same(*loaded, sample()));
     CHECK(problem.empty());
 
+#ifndef _WIN32  // Windows does not report POSIX permission bits; its profile folder is already private
     CHECK((fs::status(dir + "/nested/deeper/policy.json").permissions() & fs::perms::group_all) == fs::perms::none);
     CHECK((fs::status(dir + "/nested/deeper/policy.json").permissions() & fs::perms::others_all) == fs::perms::none);
+#endif
     CHECK(!fs::exists(dir + "/nested/deeper/policy.json.tmp"));  // no leftover from the atomic write
 }
 

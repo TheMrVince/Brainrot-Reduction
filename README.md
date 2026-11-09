@@ -1,5 +1,7 @@
 # Brainrot-Reduction
 
+[![CI](https://github.com/TheMrVince/Brainrot-Reduction/actions/workflows/ci.yml/badge.svg)](https://github.com/TheMrVince/Brainrot-Reduction/actions/workflows/ci.yml)
+
 Blocks a chosen list of apps (games, etc.) until you have solved a LeetCode problem today.
 
 - `controller/` — Java: LeetCode check, policy engine, config, tray UI

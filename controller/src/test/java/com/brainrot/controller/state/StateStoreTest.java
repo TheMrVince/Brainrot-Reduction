@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
@@ -17,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class StateStoreTest {
     private static final Instant T = Instant.parse("2026-11-05T12:00:00Z");
@@ -59,6 +61,8 @@ class StateStoreTest {
 
     @Test
     void theFileIsPrivateToTheUser(@TempDir Path dir) throws IOException {
+        assumeTrue(FileSystems.getDefault().supportedFileAttributeViews().contains("posix"),
+                "Windows has no POSIX permissions; the user's profile folder is already private");
         Path file = dir.resolve("state.json");
         new StateStore(file).save(State.empty());
 
