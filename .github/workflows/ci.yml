@@ -32,6 +32,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Gradle itself is downloaded from a GitHub release, which sometimes times out. Fetch it in a
+      # step of its own so only the download is retried, never the tests.
+      - name: Fetch Gradle (retried)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            ./gradlew --no-daemon --version && exit 0
+            echo "Fetching Gradle failed (attempt $attempt); retrying in 20 s"
+            sleep 20
+          done
+          exit 1
+
       - name: Test, then assemble the controller
         shell: bash
         run: ./gradlew --no-daemon :controller:test :controller:installDist
@@ -55,8 +67,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure
-        run: cmake -S enforcer -B enforcer/build -DCMAKE_BUILD_TYPE=Release
+      # Configuring downloads nlohmann/json from a GitHub release, which sometimes fails; try again
+      # from a clean build folder.
+      - name: Configure (retried)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            cmake -S enforcer -B enforcer/build -DCMAKE_BUILD_TYPE=Release && exit 0
+            echo "Configure failed (attempt $attempt); retrying in 20 s"
+            rm -rf enforcer/build
+            sleep 20
+          done
+          exit 1
 
       - name: Build
         run: cmake --build enforcer/build --config Release --parallel

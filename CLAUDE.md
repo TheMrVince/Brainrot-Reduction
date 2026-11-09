@@ -122,3 +122,6 @@ the controller has no log file), and the controller is not restarted after a cra
   next login; put the repetition on a separate time trigger.
 - Windows' default execution policy blocks unsigned `.ps1` files; run them with `powershell -ExecutionPolicy Bypass -File`.
 - A Windows session started before an install keeps its old PATH; set `JAVA_HOME` or the full path to `cmake` by hand.
+- Gradle and nlohmann/json both download from GitHub releases, which sometimes time out or return 504. The wrapper's
+  `networkTimeout` is 60 s, and CI retries only the download steps ("Fetch Gradle", "Configure") up to 3 times.
+  A failure there is GitHub's, not the code's: re-run the failed jobs.
